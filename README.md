@@ -4,10 +4,10 @@
 综合交易平台（Comprehensive Transaction Platform， CTP）是专门为期货公司开发的一套期货经纪业务管理系统，由交易、风险控制和结算三大系统组成。
 本项目借鉴openctp编译的Python版CTP接口。
 
-CTP原生接口文件列表：
-ThostFtdcTraderApi.h  C++头文件，包含交易相关的指令，如报单。
-ThostFtdcMdApi.h C++头文件，包含获取行情相关的指令。
-ThostFtdcUserApiStruct.h 包含了所有用到的数据结构。
+CTP原生接口文件列表：  
+ThostFtdcTraderApi.h  C++头文件，包含交易相关的指令，如报单。  
+ThostFtdcMdApi.h C++头文件，包含获取行情相关的指令。  
+ThostFtdcUserApiStruct.h 包含了所有用到的数据结构。  
 ThostFtdcUserApiDataType.h 包含了所有用到的数据类型。
 thosttraderapi.dll 交易部分的动态链接库和静态链接库。
 thosttraderapi.lib
@@ -35,6 +35,6 @@ Spi：包含所有的响应和回报函数，用于接收CTP发送，或交易�
 CTP底层接收指令和从交易所收取业务数据回报，要求运行速度很快，不应有复杂的运算；策略层做仓位计算、数据整理、下发指令，只做简单的计算，也要求速度较快；数据分析层运算量最大，较大的运算可能需要较高的硬件配置，三个层面不能相互影响运行速度，所以应分处三个进程中，后续的Python版本可以并行运行多线程，因此后续可以将三个层面运行在三个线程中。
 框架的层次结构图如下：
 <img width="649" height="789" alt="3FFC60F5F890D0FDBC2B8E0B2F937DE9" src="https://github.com/user-attachments/assets/5c9bdc43-a3b7-483f-a884-f1939872470b" />
-本项目的开发需要一定的时间，并需要持续的迭代和完善，喜欢本项目的话可以先加星关注，一起见证项目的成长，并为您的交易带来便利。
+<br>本项目的开发需要一定的时间，并需要持续的迭代和完善，喜欢本项目的话可以先加星关注，一起见证项目的成长，并为您的交易带来便利。
 
 
