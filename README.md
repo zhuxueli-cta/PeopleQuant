@@ -91,9 +91,10 @@ example.py                 #策略示例
 
 #### 安装教程
 
-1.  可从本项目仓库中下载所需版本。  
-2.  从本项目下载ctpapi.cp38-win_amd64.pyd(ctpapi.cp313-win_amd64.pyd)、trade_mdforopenctp.py、zhuchannel.py、example.py，CTP接口文件从openctp官网下载。  
-下载的所有文件放在一个文件夹即可
+```
+pip install -U peoplequant  
+```
+
 #### 使用说明
 
 1.  字段说明：  
@@ -149,5 +150,14 @@ get_option          #根据标的价格查询某档位的期权
 open_close        #实用的开平仓下单及结果处理
 "更多功能敬请期待……"
 ```
+#### 社区交流
+QQ交流群： 1016612332  
+<img width="352" height="443" alt="9672dd68758b565a8ea73adec21ca5c9_qrcode_1764224390681" src="https://github.com/user-attachments/assets/08b4095d-8a4b-4167-8a58-70bdda0301ab" />
+
+微信公众号：  
+![6964854ccb8fe49c0fc1c64e6ac81d58_%E5%BE%AE%E4%BF%A1%E5%9B%BE%E7%89%87_20251106130341_5_396](https://github.com/user-attachments/assets/e16862bf-3cbb-48ae-ae40-dd4f478d2bf6)
+
+帮助文档： http://118.89.87.140:8080/  
+
 
 
