@@ -1,10 +1,17 @@
 #!usr/bin/env python3
 #-*- coding:utf-8 -*-
 __author__ = 'zhuxueli'
-from typing import Dict, Any, Optional, Iterable, List, Tuple, Iterator
+from typing import Dict, Any, Optional, Iterable, List, Tuple, Iterator,Union
 import polars,os
 import glob,re
-from datetime import datetime,date,timedelta
+from collections import defaultdict
+from datetime import datetime,date,timedelta,time
+try:
+    import duckdb
+    import pyarrow 
+except ImportError: pass
+from threading import Thread,RLock
+from queue import Queue
 
 nReason = {4097:'网络读失败',4098:'网络写失败',8193:'接收心跳超时',8194:'发送心跳失败',8195:'收到错误报文'}
 HedgeFlag={'speculation':'1',   #投机
@@ -155,11 +162,11 @@ class Account(FullDictDataClass):
         self.CashIn = 0
         #手续费
         self.Commission = 0
-        #平仓盈亏
+        #平仓盈亏,不含期权平仓盈亏
         self.CloseProfit = 0
-        #持仓盈亏
+        #持仓盈亏,不含期权盈亏
         self.PositionProfit = 0
-        #期货结算准备金
+        #期货结算准备金,动态权益,不含期权市值
         self.Balance = 0
         #可用资金
         self.Available = 0
@@ -225,8 +232,16 @@ class Account(FullDictDataClass):
         self.local_timestamp = 0
         #风险度
         self.risk_ratio = 0
-        #浮动盈亏
+        #浮动盈亏,含期权盈亏
         self.float_profit = 0
+        #静态权益,含出入金
+        self.static_balance = 0
+        #市值权益,含期权市值
+        self.market_balance = 0
+        #市值风险度
+        self.market_risk_ratio = 0
+        #期权市值
+        self.option_value = 0
 
 class Position(FullDictDataClass):
     """持仓数据类"""
@@ -284,6 +299,10 @@ class Position(FullDictDataClass):
         self.instrument_id = ""
         #交易所代码
         self.exchange_id = ""
+        #合约代码
+        self.InstrumentID = ""
+        #交易所代码
+        self.ExchangeID = ""
         #期货"FUTURE",看涨期权"CALL",看跌期权"PUT"
         self.ins_class = ""
         #期权行权价
@@ -387,6 +406,8 @@ class Trade(FullDictDataClass):
         self.ExchangeInstID = ""
         #本地时间戳
         self.local_timestamp = 0
+        #成交单ID,由f'{ExchangeID}_{OrderSysID}_{TradeID}'组成
+        self.trade_id = ''
 
 class Order(FullDictDataClass):
     """委托单数据类"""
@@ -534,6 +555,12 @@ class Order(FullDictDataClass):
         self.SessionReqSeq = ""
         #本地时间戳
         self.local_timestamp = 0
+        #成交均价,在委托单结束时更新
+        self.trade_price = float("nan")
+        #委托单对应的成交单列表
+        self.trades_list = []
+        #委托单ID,由f'{FrontID}_{SessionID}_{OrderRef}'组成
+        self.order_id = ''
 
 class Quote(FullDictDataClass):
     """行情快照数据类"""
@@ -641,6 +668,15 @@ class Quote(FullDictDataClass):
         self.ctp_timestamp = 0
         #CTP行情datetime
         self.ctp_datetime = 0
+        #价格小数位数
+        self.price_decs = 0
+        #交易日
+        self.trading_day = 0
+        #期货"FUTURE",看涨期权"CALL",看跌期权"PUT"
+        self.ins_class = ""
+        #是否已被使用标志
+        self.used = False  
+        
 
 class InstrumentProperty(FullDictDataClass):
     """行情快照数据类"""
@@ -721,7 +757,11 @@ class InstrumentProperty(FullDictDataClass):
         #基础商品代码
         self.UnderlyingInstrID = ""
         #到期剩余日
-        self.expire_rest_days = float('nan')
+        self.expire_rest_days = 0
+        #到交割月前一月最后一日剩余日
+        self.pre_expire_days = 0
+        #交割月前一月最后一日，格式YYYYMM
+        self.last_day_pre_expire_month = ""
 
 
 
@@ -733,8 +773,8 @@ SUPPORTED_UNITS = {
     "h": {"full_name": "hours", "desc": "小时"},
     "d": {"full_name": "days", "desc": "天"},
     "w": {"full_name": "weeks", "desc": "周"},
-    "M": {"full_name": "months", "desc": "月"},     # 注意：pl.duration不支持months，需特殊处理
-    "y": {"full_name": "years", "desc": "年"}       # pl.duration不支持years，需特殊处理
+    "M": {"full_name": "months", "desc": "月"},     # 注意：polars.duration不支持months，需特殊处理
+    "y": {"full_name": "years", "desc": "年"}       # polars.duration不支持years，需特殊处理
 }
 # 预定义常用周期（可扩展）
 COMMON_CYCLES = ["1s", "3s", "5s", "10s", "30s", "1m", "5m", "15m", "30m", "1h", "2h", "4h", "1d", "1w"]
@@ -770,16 +810,23 @@ class MutableDataHolder():
     def tail(self, n: int) -> polars.DataFrame:
         """便捷方法：获取最新n条数据"""
         return self._data.tail(n)
+    def head(self, n: int) -> polars.DataFrame:
+        """便捷方法：获取开始的n条数据"""
+        return self._data.head(n)
+    def slice(self, offset: int, length: Union[int, None] = None) -> polars.DataFrame:
+        """便捷方法：获取从第offset行开始的length条数据"""
+        return self._data.slice(offset, length)
 
 
 class MutableTickHolder(MutableDataHolder):
     """Tick数据可变容器，定义Tick专属schema"""
     def __init__(self):
         tick_schema = {
-            "TradingDay": polars.String,
-            "ActionDay": polars.String,
+            "ctp_datetime": polars.Datetime,
             "InstrumentID": polars.String,
             "ExchangeID": polars.String,
+            "TradingDay": polars.String,
+            "ActionDay": polars.String,
             "LastPrice": polars.Float64,
             "Volume": polars.Int64,
             "Turnover": polars.Float64,
@@ -788,10 +835,16 @@ class MutableTickHolder(MutableDataHolder):
             "BidVolume1": polars.Int64,
             "AskPrice1": polars.Float64,
             "AskVolume1": polars.Int64,
+            "AveragePrice": polars.Float64,
+            "HighestPrice": polars.Float64,
+            "LowestPrice": polars.Float64,
+            "UpperLimitPrice": polars.Float64,
+            "LowerLimitPrice": polars.Float64,
             "UpdateTime": polars.String,
             "UpdateMillisec": polars.Int64,
-            "ctp_datetime": polars.Datetime,
             "trading_day": polars.Date,
+            'expire_rest_days': polars.Int64,
+            'pre_expire_days': polars.Int64,
             "is_valid": polars.Boolean
         }
         super().__init__(tick_schema)
@@ -809,6 +862,7 @@ class MutableKlineHolder(MutableDataHolder):
             "Volume": polars.Int64,
             "Turnover": polars.Float64,
             "OpenInterest": polars.Float64,
+            "AveragePrice": polars.Float64,
             "period_start": polars.Datetime,
             "period_end": polars.Datetime,
             "period": polars.String
@@ -816,8 +870,9 @@ class MutableKlineHolder(MutableDataHolder):
         super().__init__(kline_schema)
 
 class CTPDataProcessor():
-    def __init__(self, storage_format: str = "parquet",_logfile=""):
-        """初始化处理器，支持选择存储格式（parquet或csv）"""
+    def __init__(self,save_tick:bool=True, storage_format: str = "parquet",kline_tick_queue={},backtest=None,_logfile=""):
+        """初始化处理器，支持选择存储格式（parquet、csv、duckdb）"""
+        self.save_tick = save_tick
         if not _logfile:
             try:
                 self._flowfile = os.path.dirname(os.path.abspath(__file__)) #当前程序目录(该py文件__file__所在目录)
@@ -826,14 +881,52 @@ class CTPDataProcessor():
         else: self._logfile = _logfile
         self.tick_dir = fr"{self._logfile}\tick_data"
         self.kline_dir = fr"{self._logfile}\kline_data"
+        self._kline_tick_queue = kline_tick_queue
+        self.backtest = backtest
+        # 新增批量缓存
+        self.tick_batch_cache = defaultdict(list)
+        self.BATCH_THRESHOLD = 100  # 累计100条再写入
         # 创建数据目录
         os.makedirs(self.tick_dir, exist_ok=True)
         os.makedirs(self.kline_dir, exist_ok=True)
-        
+        #self.db_path = os.path.join(self._logfile, "ticks.duckdb")
+        # 1. 定义目标 schema（与 _ensure_tick_table 一致）
+        self.target_schema = {
+            "ctp_datetime": polars.Datetime,
+            "InstrumentID": polars.Utf8,
+            "ExchangeID": polars.Utf8,
+            "TradingDay": polars.Utf8,
+            "ActionDay": polars.Utf8,
+            "LastPrice": polars.Float64,
+            "Volume": polars.Int64,
+            "Turnover": polars.Float64,
+            "OpenInterest": polars.Float64,
+            "BidPrice1": polars.Float64,
+            "BidVolume1": polars.Int64,
+            "AskPrice1": polars.Float64,
+            "AskVolume1": polars.Int64,
+            "AveragePrice": polars.Float64,
+            "HighestPrice": polars.Float64,
+            "LowestPrice": polars.Float64,
+            "UpperLimitPrice": polars.Float64,
+            "LowerLimitPrice": polars.Float64,
+            "UpdateTime": polars.Utf8,
+            "UpdateMillisec": polars.Int64,
+            "trading_day": polars.Date,
+            'expire_rest_days': polars.Int64,
+            'pre_expire_days': polars.Int64,
+            "is_valid": polars.Boolean,
+        }
+
+        #self.con = duckdb.connect(self.db_path, read_only=False)
+        #self._ensure_tick_table()
+        # 存储DuckDB连接（按合约ID缓存，避免重复连接）
+        self.duckdb_connections: Dict[str, 'duckdb.DuckDBPyConnection'] = {}
+        self.duckdb_lock = RLock()  # 添加连接操作锁
         # 验证存储格式
         self.storage_format = storage_format.lower()
-        if self.storage_format not in ["parquet", "csv"]:
-            raise ValueError(f"不支持的存储格式：{storage_format}，仅支持 'parquet' 和 'csv'")
+        if self.storage_format not in ["parquet", "csv", "duckdb"]:
+            raise ValueError(f"不支持的存储格式：{storage_format}，仅支持 'parquet' 、 'csv' 和 'duckdb'")
         
         # 数据缓存：使用可变容器
         self.tick_cache: Dict[str, MutableTickHolder] = {}  # {合约ID: 可变Tick容器}
@@ -841,23 +934,263 @@ class CTPDataProcessor():
         self.kline_periods = {}  #K线周期列表
         self.max_tick_count = {}  #最大缓存Tick数量
         self.max_kline_count = {}  #最大缓存kline数量
+        self.snapshot_queue = Queue()
+        task = Thread(target=self._append_tick_to_file,args=tuple())
+        task.start()
 
         # 加载本地数据
-        self._load_local_data()
+        self._load_local_data(n=100)
+    
+    def _peek_latest_ticks(
+        self,
+        source: str,
+        format: str = "parquet",
+        n: int = 100,
+        time_col: str = "ctp_datetime",
+        instrument_id: Optional[str] = None
+    ) -> polars.DataFrame:
+        """
+        支持 parquet / csv / duckdb 三种格式
+        :param source: 
+            - parquet/csv: 文件路径（如 "rb2505.parquet"）
+            - duckdb: 数据库路径（如 "ticks.duckdb"），需配合 table_name
+        :param format: "parquet", "csv", or "duckdb"
+        :param instrument_id: 仅 duckdb 多合约表时需要
+        """
+        if format == "parquet":
+            tick_df =  self._peek_parquet(source, n, time_col)
+        elif format == "csv":
+            tick_df =  self._peek_csv(source, n, time_col)
+        elif format == "duckdb":
+            # source 是 .duckdb 文件路径
+            tick_df = self._peek_duckdb(source, n, time_col, instrument_id)
+        else:
+            raise ValueError(f"Unsupported format: {format}")
+        
+
+        # 确保时间类型正确
+        if "ctp_datetime" in tick_df.columns and not isinstance(tick_df["ctp_datetime"].dtype, polars.Datetime):
+            tick_df = tick_df.with_columns(
+                polars.col("ctp_datetime").str.strptime(polars.Datetime, "%Y-%m-%d %H:%M:%S%.f").alias("ctp_datetime")
+            )
+        if "trading_day" in tick_df.columns and not isinstance(tick_df["trading_day"].dtype, polars.Date):
+            tick_df = tick_df.with_columns(
+                polars.col("trading_day").str.strptime(polars.Date, "%Y-%m-%d").alias("trading_day")
+            )
+        
+        return tick_df.sort("ctp_datetime")
+
+    def _peek_parquet(self, path: str, n: int, time_col: str) -> polars.DataFrame:
+        """Parquet 原生支持高效 tail"""
+        lf = polars.scan_parquet(path)
+        # 假设已按 time_col 排序
+        return lf.tail(n).collect(streaming=True)
+    
+    def _peek_csv(self, path: str, n: int, time_col: str) -> polars.DataFrame:
+        """CSV 需先统计行数再跳读"""
+        if not os.path.exists(path):
+            return polars.DataFrame()
+        
+        total_lines = self._count_lines(path)
+        if total_lines <= 1:
+            return polars.DataFrame()
+        
+        data_rows = total_lines - 1
+        if data_rows <= n:
+            return polars.read_csv(path,schema_overrides={**{k: polars.String for k in [ "InstrumentID","ExchangeInstID","TradingDay","ActionDay","UpdateTime"]},"ctp_datetime": polars.Datetime,"trading_day": polars.Date},
+                                    try_parse_dates=True)
+        
+        skip_rows = data_rows - n
+        return polars.read_csv(
+            path,
+            n_rows=n,
+            skip_rows_after_header=skip_rows,
+            schema_overrides={**{k: polars.String for k in [ "InstrumentID","ExchangeInstID","TradingDay","ActionDay","UpdateTime"]},"ctp_datetime": polars.Datetime,"trading_day": polars.Date},  # 强制字符串类型
+            try_parse_dates=True
+            
+        )
+
+    def _count_lines(self, file_path: str) -> int:
+        """跨平台快速统计文件行数"""
+        try:
+            if os.name == 'posix':
+                import subprocess
+                result = subprocess.run(['wc', '-l', file_path], 
+                                    capture_output=True, text=True)
+                return int(result.stdout.split()[0])
+            else:  # Windows
+                # 使用 PowerShell 更可靠
+                import subprocess
+                cmd = ["powershell", "-Command", f"(Get-Content '{file_path}' | Measure-Object -Line).Lines"]
+                result = subprocess.run(cmd, capture_output=True, text=True, shell=False)
+                return int(result.stdout.strip())
+        except Exception:
+            # 降级：Python 逐行计数（慢）
+            with open(file_path, 'rb') as f:
+                return sum(1 for _ in f)
+
+    def _peek_duckdb(self, db_path: str, n: int, time_col: str, instrument_id: Optional[str] = None) -> polars.DataFrame:
+        """从 DuckDB 文件中查询最新 n 条 tick"""
+        if not os.path.exists(db_path):
+            return polars.DataFrame(schema=self.target_schema)
+
+        #con = duckdb.connect(db_path )
+        con = self._get_duckdb_conn(instrument_id)
+        try:
+            where_clause = ""
+            params = []
+            if instrument_id:
+                where_clause = "WHERE InstrumentID = ?"
+                params = [instrument_id]
+
+            query = f"""
+                SELECT * FROM ticks {where_clause}
+                ORDER BY {time_col} DESC
+                LIMIT {n}
+            """
+            df = con.execute(query, params).pl()
+            return df.sort(time_col)  # 恢复时间顺序
+        finally:
+            pass
+            #con.close()
+
+    def _load_ticks_since(
+        self,
+        source: str,
+        format: str,
+        earliest_time: datetime,
+        time_col: str = "ctp_datetime",
+        instrument_id: Optional[str] = None
+    ) -> polars.DataFrame:
+        """加载 >= earliest_time 的所有 tick"""
+        if format == "parquet":
+            lf = polars.scan_parquet(source)
+            return lf.filter(polars.col(time_col) >= earliest_time).collect(streaming=True)
+        
+        elif format == "csv":
+            lf = polars.scan_csv(source, 
+                                 schema_overrides={**{k: polars.String for k in [ "InstrumentID","ExchangeInstID","TradingDay","ActionDay","UpdateTime"]},"ctp_datetime": polars.Datetime,"trading_day": polars.Date},  # 强制字符串类型
+                                 try_parse_dates=True)
+            return lf.filter(polars.col(time_col) >= earliest_time).collect(streaming=True)
+        
+        elif format == "duckdb":
+            # source 就是完整的 .duckdb 文件路径（如 rb2605_tick.duckdb）
+            db_path = source
+            table_name = "ticks"  # 固定表名
+
+            if not os.path.exists(db_path):
+                return polars.DataFrame(schema=self.target_schema)  # 返回空DF
+
+            #con = duckdb.connect(db_path )
+            con = self._get_duckdb_conn(instrument_id)
+            try:
+                # 使用参数化查询更安全
+                where_clause = f"{time_col} >= ?"
+                params = [earliest_time]
+                if instrument_id:
+                    where_clause += " AND InstrumentID = ?"
+                    params.append(instrument_id)
+                query = f"SELECT * FROM {table_name} WHERE {where_clause}"
+                return con.execute(query, params).pl()
+            finally:
+                pass
+                #con.close() #不能 close 连接！因为它是共享的
+
+    def _calculate_earliest_time(
+        self,
+        latest_time: datetime,
+        period: str,
+        kline_count: int,
+        buffer_periods: int = 2
+    ) -> datetime:
+        """根据周期和数量计算需要保留的最早 tick 时间"""
+        is_valid, _ = self._validate_period(period)
+        if not is_valid:
+            raise ValueError(f"Invalid period: {period}")
+        
+        period_type, num, unit = self._classify_period(period)
+        total_periods = kline_count + buffer_periods
+        
+        if period_type == "intraday":
+            # 日内：用 timedelta 计算
+            duration_param = self._get_duration_param(unit, num * total_periods)
+            delta = timedelta(**{k: v for k, v in duration_param.items()})  # 转为 timedelta
+            return latest_time - delta
+        else:
+            # 日线：按天数估算
+            days_map = {"d": 1, "w": 7, "M": 30, "y": 365}
+            days = num * total_periods * days_map.get(unit, 1)
+            return latest_time - timedelta(days=days)
+
+    def _get_duckdb_conn(self, instrument_id: str) -> 'duckdb.DuckDBPyConnection':
+        """获取指定合约的DuckDB连接（单例模式，避免重复连接）"""
+        if instrument_id in self.duckdb_connections:
+            return self.duckdb_connections[instrument_id]
+        
+        # 按合约ID生成独立的DuckDB文件路径（复用原有文件路径逻辑，仅改扩展名）
+        db_file_path = self._get_tick_file_path(instrument_id).replace(f".{self.storage_format}", ".duckdb")
+        # 建立连接（只读=False，支持写入）
+        # ========== 关键修复：连接配置 ==========
+        # 禁用WAL（减少锁竞争）、设置超时、单线程模式
+        conn = duckdb.connect(
+            db_file_path,
+            read_only=False,
+            config={
+                #"wal_autocheckpoint": 0,  # 禁用WAL自动检查点
+                "threads": 1,             # 多核利用（聚合时受益）
+                #"default_null_order": "NULLS LAST"
+            }
+        )
+        # 确保ticks表存在（每个合约的DuckDB文件内都有ticks表）
+        self._ensure_tick_table(conn)
+        # 缓存连接
+        self.duckdb_connections[instrument_id] = conn
+        return conn
+
+    def _ensure_tick_table(self, conn: 'duckdb.DuckDBPyConnection'):
+        """确保指定连接内的ticks表存在（每个合约的DuckDB文件独立建表）"""
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS ticks (
+            ctp_datetime TIMESTAMP,  
+            InstrumentID VARCHAR, 
+            ExchangeID VARCHAR,                                    
+            TradingDay VARCHAR,
+            ActionDay VARCHAR,
+            LastPrice DOUBLE,
+            Volume BIGINT,
+            Turnover DOUBLE,
+            OpenInterest DOUBLE,
+            BidPrice1 DOUBLE,
+            BidVolume1 BIGINT,
+            AskPrice1 DOUBLE,
+            AskVolume1 BIGINT,
+            AveragePrice DOUBLE,
+            HighestPrice DOUBLE,
+            LowestPrice DOUBLE,
+            UpperLimitPrice DOUBLE,
+            LowerLimitPrice DOUBLE,
+            UpdateTime VARCHAR,
+            UpdateMillisec BIGINT,
+            trading_day DATE,
+            expire_rest_days BIGINT,
+            pre_expire_days BIGINT,
+            is_valid BOOLEAN
+        )
+        """)
 
     # 工具方法：周期单位转换 
     def _get_duration_param(self, unit: str, value: int) -> Dict[str, int]:
         """
-        将周期缩写（如'm'）转换为pl.duration()的合法参数
+        将周期缩写（如'm'）转换为polars.duration()的合法参数
         返回格式：{完整单位名称: 数值}，如{"minutes": 5}
         """
         if unit not in SUPPORTED_UNITS:
             raise ValueError(f"不支持的周期单位：{unit}")
         
         full_unit = SUPPORTED_UNITS[unit]["full_name"]
-        # 特殊处理：pl.duration不支持months/years，用days近似（或根据业务调整）
+        # 特殊处理：polars.duration不支持months/years，用days近似（或根据业务调整）
         if full_unit in ["months", "years"]:
-            raise ValueError(f"pl.duration不支持{SUPPORTED_UNITS[unit]['desc']}单位，请使用dt.offset_by替代")
+            raise ValueError(f"polars.duration不支持{SUPPORTED_UNITS[unit]['desc']}单位，请使用dt.offset_by替代")
         
         return {full_unit: value}
     # 文件路径管理
@@ -872,78 +1205,112 @@ class CTPDataProcessor():
         return os.path.join(period_dir, f"{instrument_id}_kline.{self.storage_format}")
 
     # 本地数据加载
-    def _load_local_data(self) -> None:
-        """加载本地所有合约的历史数据"""
-        # 查找对应格式的Tick文件
-        tick_files = glob.glob(os.path.join(self.tick_dir, f"*.{self.storage_format}"))
-        
-        for file_path in tick_files:
+    def _load_local_data(self,n=100) -> None:
+        """加载本地所有合约的历史数据（适配parquet/csv/duckdb）"""
+        if self.storage_format == "duckdb":
+            # 加载DuckDB格式：查找所有{合约ID}_tick.duckdb文件
+            duckdb_files = glob.glob(os.path.join(self.tick_dir, "*_tick.duckdb"))
+            for file_path in duckdb_files:
+                try:
+                    # 解析合约ID（文件名格式：{合约ID}_tick.duckdb）
+                    file_name = os.path.basename(file_path)
+                    instrument_id = file_name.replace("_tick.duckdb", "")
+                    # 加载该合约数据
+                    self._load_instrument_data(instrument_id,n = n)
+                except Exception as e:
+                    print(f"加载DuckDB文件 {file_path} 失败：{str(e)}")
+        else:
+            # 原有parquet/csv加载逻辑
+            tick_files = glob.glob(os.path.join(self.tick_dir, f"*.{self.storage_format}"))
+            for file_path in tick_files:
+                try:
+                    # 解析合约ID（文件名格式：{合约ID}_tick.xxx）
+                    file_name = os.path.basename(file_path)
+                    instrument_id = file_name.replace(f"_tick.{self.storage_format}", "")
+                    # 读取并解析Tick数据
+                    #tick_df = self._read_tick_file(file_path)
+                    tick_df = self._peek_latest_ticks(file_path, format=self.storage_format, n=n)
+                    if self.backtest is None:
+                        tick_df = tick_df.filter(polars.col("ctp_datetime") <= datetime.now())
+                    else:
+                        tick_df = tick_df.filter(polars.col("ctp_datetime") <= self.backtest.start_datetime)
+                    # 初始化Tick容器
+                    tick_holder = MutableTickHolder()
+                    tick_holder.data = tick_df
+                    self.tick_cache[instrument_id] = tick_holder
+                except Exception as e:
+                    print(f"加载 {file_path} 失败：{str(e)}")
+
+    def _read_tick_file(self, file_path_or_instrument_id: str) -> polars.DataFrame:
+        """
+        统一读取Tick文件接口：
+        - 若为duckdb格式：参数为instrument_id，从对应DuckDB文件读取
+        - 若为parquet/csv：参数为file_path，按原有逻辑读取
+        """
+        if self.storage_format == "duckdb":
+            db_path = self._get_tick_file_path(file_path_or_instrument_id)  # 获取完整 .duckdb 路径
+            if not os.path.exists(db_path):
+                return MutableTickHolder().data
+
+            con = duckdb.connect(db_path )
             try:
-                # 解析合约ID（文件名格式：{合约ID}_tick.xxx）
-                file_name = os.path.basename(file_path)
-                instrument_id = file_name.replace(f"_tick.{self.storage_format}", "")
-                
-                # 读取并解析Tick数据
-                tick_df = self._read_tick_file(file_path)
-                #print(f"加载 {instrument_id} 历史Tick数据：共 {len(tick_df)} 条")
-
-                # 初始化Tick容器
-                tick_holder = MutableTickHolder()
-                tick_holder.data = tick_df
-                self.tick_cache[instrument_id] = tick_holder
-                
+                return con.execute("SELECT * FROM ticks ORDER BY ctp_datetime").pl()
+            except:
+                return MutableTickHolder().data
+            finally:
+                con.close()
+        else:
+            # Parquet/CSV格式：参数是file_path（原有逻辑）
+            file_path = file_path_or_instrument_id
+            try:
+                if file_path.endswith(".parquet"):
+                    tick_df = polars.read_parquet(file_path
+                                                  )
+                else:
+                    tick_df = polars.read_csv(
+                        file_path,
+                        #parse_dates=["ctp_datetime", "trading_day"],
+                        schema_overrides={**{k: polars.String for k in [ "InstrumentID","ExchangeInstID","TradingDay","ActionDay","UpdateTime"]},"ctp_datetime": polars.Datetime,"trading_day": polars.Date}  # 强制字符串类型
+                    )
+                # 确保时间类型正确
+                if "ctp_datetime" in tick_df.columns and not isinstance(tick_df["ctp_datetime"].dtype, polars.Datetime):
+                    tick_df = tick_df.with_columns(
+                        polars.col("ctp_datetime").str.strptime(polars.Datetime, "%Y-%m-%d %H:%M:%S%.f").alias("ctp_datetime")
+                    )
+                if "trading_day" in tick_df.columns and not isinstance(tick_df["trading_day"].dtype, polars.Date):
+                    tick_df = tick_df.with_columns(
+                        polars.col("trading_day").str.strptime(polars.Date, "%Y-%m-%d").alias("trading_day")
+                    )
+                return tick_df.sort("ctp_datetime")
             except Exception as e:
-                print(f"加载 {file_path} 失败：{str(e)}")
-
-    def _read_tick_file(self, file_path: str) -> polars.DataFrame:
-        """读取本地Tick文件（自动适配parquet和csv格式）"""
-        try:
-            if file_path.endswith(".parquet"):
-                # 读取Parquet文件（保留原始数据类型）
-                tick_df = polars.read_parquet(file_path)
-            else:
-                # 读取CSV文件（需手动解析时间字段）
-                tick_df = polars.read_csv(
-                    file_path,
-                    parse_dates=["ctp_datetime", "trading_day"]
-                )
-            
-            # 确保时间类型正确
-            if "ctp_datetime" in tick_df.columns and not isinstance(tick_df["ctp_datetime"].dtype, polars.Datetime):
-                tick_df = tick_df.with_columns(
-                    polars.col("ctp_datetime").str.strptime(polars.Datetime, "%Y-%m-%d %H:%M:%S%.f").alias("ctp_datetime")
-                )
-            if "trading_day" in tick_df.columns and not isinstance(tick_df["trading_day"].dtype, polars.Date):
-                tick_df = tick_df.with_columns(
-                    polars.col("trading_day").str.strptime(polars.Date, "%Y-%m-%d").alias("trading_day")
-                )
-                
-            return tick_df.sort("ctp_datetime")
-            
-        except Exception as e:
-            raise ValueError(f"解析Tick文件 {file_path} 失败：{str(e)}")
+                raise ValueError(f"解析Tick文件 {file_path} 失败：{str(e)}")
 
     # Tick数据处理
     def process_snapshot(self, snapshot, save_instrument_id: str = "") -> None:
         """处理单条CTP快照数据"""
-        
         instrument_id = snapshot['InstrumentID']
         if not save_instrument_id: save_instrument_id = instrument_id
         tick_record = self._snapshot_to_tick(snapshot)
-        self._update_tick_cache(instrument_id, tick_record)
-        self._append_tick_to_file(save_instrument_id, tick_record)
-        # 更新所有周期K线
-        for period in self.kline_periods[instrument_id]:
-            self._update_kline(instrument_id, period,self.max_kline_count[instrument_id][period])
-        #print({"process_snapshot":snapshot})
+        if tick_record is not None:
+            self._update_tick_cache(instrument_id, tick_record)
+            #self._append_tick_to_file(save_instrument_id, tick_record)
+            #先更新tick再更新K线
+            # 更新所有周期K线
+            for period in self.kline_periods[instrument_id]:
+                self._update_kline(instrument_id, period,polars.DataFrame([tick_record]),self.max_kline_count[instrument_id][period])
+            if self.save_tick:
+                self.snapshot_queue.put_nowait((save_instrument_id, tick_record))
+        if instrument_id in self._kline_tick_queue :
+            if 'tick' in self._kline_tick_queue[instrument_id]:
+                self._kline_tick_queue[instrument_id]['tick'].put(1)
+            if 'kline' in self._kline_tick_queue[instrument_id]:
+                self._kline_tick_queue[instrument_id]['kline'].put(1)
 
     def process_snapshots_batch(self, snapshots: List, save_instrument_id: str = "") -> None:
         """批量处理CTP快照（提升高频场景性能）"""
         if not snapshots:
             return
-            
-        # 按合约分组处理
-        from collections import defaultdict
+        
         grouped_snapshots = defaultdict(list)
         for snap in snapshots:
             grouped_snapshots[snap['InstrumentID']].append(snap)
@@ -960,7 +1327,7 @@ class CTPDataProcessor():
             
             # 更新K线
             for period in self.kline_periods[instrument_id]:
-                self._update_kline(instrument_id, period,self.max_kline_count[instrument_id][period])
+                self._update_kline(instrument_id, period,new_ticks,self.max_kline_count[instrument_id][period])
 
     def _snapshot_to_tick(self, snapshot) -> Dict:
         """将CTP快照转换为标准化Tick（含双重时间标识）"""
@@ -971,11 +1338,15 @@ class CTPDataProcessor():
             ctp_datetime = datetime.strptime(natural_time_str, "%Y%m%d %H:%M:%S.%f")
         except ValueError as e:
             ctp_datetime = datetime.strptime(f"{action_day} {snapshot['UpdateTime']}", "%Y%m%d %H:%M:%S")
-        
+        instrument_id = snapshot['InstrumentID']
+        if instrument_id in self.tick_cache and not self.tick_cache[instrument_id].data.is_empty():
+            if ctp_datetime <= self.tick_cache[instrument_id].data.tail(1)['ctp_datetime'][0] :
+                self.tick_cache[instrument_id].data = self.tick_cache[instrument_id].data.filter(polars.col("ctp_datetime") <= ctp_datetime)
         # 2. 交易日标识（业务日期）
         trading_day = snapshot['TradingDay']  # 格式："20231011"
         trading_day_date = datetime.strptime(trading_day, "%Y%m%d").date()
         snapshot.update({"ctp_datetime": ctp_datetime,"trading_day": trading_day_date, "is_valid": snapshot['LastPrice'] > 0})
+        snapshot = {k:v for k,v in snapshot.items() if k in self.target_schema}
         return snapshot
 
     def _update_tick_cache(self, instrument_id: str, tick_record: Dict) -> None:
@@ -983,7 +1354,6 @@ class CTPDataProcessor():
         new_tick = polars.DataFrame([tick_record])
         self._update_tick_cache_batch(instrument_id, new_tick)
         
-
     def _update_tick_cache_batch(self, instrument_id: str, new_ticks: polars.DataFrame) -> None:
         """批量更新Tick缓存"""
         # 初始化容器（首次更新时）
@@ -992,10 +1362,12 @@ class CTPDataProcessor():
         
         tick_holder = self.tick_cache[instrument_id]
         current_ticks = tick_holder.data
+        # 对齐新旧数据的列顺序
+        new_ticks = self.align_dataframe(new_ticks)
         # 合并数据并去重
         if len(current_ticks) > 0:
             combined = polars.concat([current_ticks, new_ticks])
-            combined = combined.sort("ctp_datetime").unique(subset=["ctp_datetime"], keep="last")
+            combined = combined.unique(subset=["ctp_datetime"], keep="last").sort("ctp_datetime")
             # 限制缓存大小
             if len(combined) > self.max_tick_count[instrument_id]:
                 combined = combined.tail(self.max_tick_count[instrument_id])
@@ -1003,39 +1375,96 @@ class CTPDataProcessor():
         else:
             # 首次添加
             tick_holder.data = new_ticks.sort("ctp_datetime")
+        
 
+    def align_dataframe(self, df: polars.DataFrame ) -> polars.DataFrame:
+        """
+        对齐DataFrame的列顺序，并为缺失的列填充null值。
+        :param df: 输入的DataFrame
+        :param columns: 目标列顺序
+        :return: 列顺序对齐后的DataFrame
+        """
+        # 确保所有目标列都存在，缺失的列用null填充
+        for col in self.target_schema:
+            if col not in df.columns:
+                df = df.with_columns(polars.lit(None).alias(col).cast(self.target_schema[col] ))
+        
+        # 选择目标列顺序
+        return df.select(list(self.target_schema))
     # Tick数据持久化（双格式支持）
-    def _append_tick_to_file(self, instrument_id: str, tick_record: Dict) -> None:
-        """追加单个Tick到文件"""
-        self._append_ticks_batch(instrument_id, polars.DataFrame([tick_record]))
+    def _append_tick_to_file(self ) -> None:
+        """追加Tick到文件"""
+        while True:
+            instrument_id, tick_record = self.snapshot_queue.get()
+            self.tick_batch_cache[instrument_id].append(tick_record)
+            while not self.snapshot_queue.empty():
+                instrument_id, tick_record = self.snapshot_queue.get()
+                self.tick_batch_cache[instrument_id].append(tick_record)
+            if len(self.tick_batch_cache[instrument_id]) > 0:
+                # 批量写入
+                tick_df = polars.DataFrame(self.tick_batch_cache[instrument_id])
+                self._append_ticks_batch(instrument_id, tick_df)
+                self.tick_batch_cache[instrument_id].clear()
+            continue
+            # {合约ID: {周期: 可变K线容器}}
+            for instrument_id,v in self.kline_cache.items():
+                for period , kline_holder in v.items():
+                    self._save_kline_to_file(instrument_id, period, kline_holder.data)
 
     def _append_ticks_batch(self, instrument_id: str, tick_df: polars.DataFrame) -> None:
         """批量追加Tick到文件（根据存储格式选择方式）"""
-        file_path = self._get_tick_file_path(instrument_id)
-        
-        # 格式化时间字段（便于存储）
-        formatted_df = tick_df.with_columns([
-            polars.col("ctp_datetime").dt.strftime("%Y-%m-%d %H:%M:%S%.f").alias("ctp_datetime"),
-            polars.col("trading_day").dt.strftime("%Y-%m-%d").alias("trading_day")
-        ])
-        
-        if self.storage_format == "parquet":
-            # Parquet不支持追加，需先读再合并（适合大数据量）
-            if os.path.exists(file_path):
-                existing_df = polars.read_parquet(file_path)
-                combined_df = polars.concat([existing_df, formatted_df])
-                # 去重并限制大小
-                combined_df = combined_df.unique(subset=["ctp_datetime"], keep="last").sort("ctp_datetime")
-                #if len(combined_df) > self.max_tick_count[instrument_id]:
-                #    combined_df = combined_df.tail(self.max_tick_count[instrument_id])
-                combined_df.write_parquet(file_path)
-            else:
-                formatted_df.write_parquet(file_path)
+        if self.storage_format == "duckdb":
+            with self.duckdb_lock:
+                # DuckDB格式：写入对应合约的独立DuckDB文件
+                df = self.align_dataframe(tick_df)
+                # 获取该合约的DuckDB连接
+                conn = self._get_duckdb_conn(instrument_id)
+                try:
+                    # 1. 注册临时视图（指定类型）
+                    #conn.register("new_ticks", df)
+                    table = df.to_arrow()
+                    conn.register("new_ticks", table)
+                    # 2. 开启事务，避免逐行插入阻塞
+                    # 分批插入（每1000条一批，避免单批次数据量过大）
+                    conn.execute("""
+                        INSERT INTO ticks 
+                        SELECT * FROM new_ticks
+                        WHERE ctp_datetime IS NOT NULL  -- 过滤无效时间
+                    """)
+                    
+                except Exception as e:
+                    conn.execute("ROLLBACK")  # 出错回滚
+                    print(f"DuckDB插入失败：{e}")
+                    raise
+                
+                # 可选：定期执行VACUUM优化（按需，低频执行）
+                # if random.random() < 0.01:  # 1%概率执行
+                #     conn.execute("VACUUM ticks")
         else:
-            # CSV支持追加（适合小数据量或调试）
-            include_header = not os.path.exists(file_path)
-            with open(file_path, "a", encoding="utf-8") as f:
-                formatted_df.write_csv( f, include_header=include_header )
+            # Parquet/CSV格式：原有逻辑
+            file_path = self._get_tick_file_path(instrument_id)
+            # 格式化时间字段（便于存储）
+            #formatted_df = tick_df.with_columns([
+            #    polars.col("ctp_datetime").dt.strftime("%Y-%m-%d %H:%M:%S%.f").alias("ctp_datetime"),
+            #    polars.col("trading_day").dt.strftime("%Y-%m-%d").alias("trading_day")
+            #])
+            formatted_df = self.align_dataframe(tick_df)
+            
+            if self.storage_format == "parquet":
+                # Parquet不支持追加，需先读再合并
+                if os.path.exists(file_path):
+                    existing_df = polars.read_parquet(file_path)
+                    combined_df = polars.concat([existing_df, formatted_df])
+                    # 去重并限制大小
+                    combined_df = combined_df.unique(subset=["ctp_datetime"], keep="last").sort("ctp_datetime")
+                    combined_df.write_parquet(file_path)
+                else:
+                    formatted_df.write_parquet(file_path)
+            else:
+                # CSV支持追加
+                include_header = not os.path.exists(file_path)
+                with open(file_path, "a", encoding="utf-8") as f:
+                    formatted_df.write_csv(f, include_header=include_header)
 
     # K线生成与更新
     @staticmethod
@@ -1067,7 +1496,7 @@ class CTPDataProcessor():
         return period_type, num, unit
 
     def generate_any_period_kline( self, instrument_id: str, tick_df: polars.DataFrame, period: str, kline_count: int ) -> polars.DataFrame:
-        """生成任意周期K线（日内用自然时间，日级用交易日）"""
+        """生成任意周期K线（日内用自然时间,避免夜盘白盘属于同一交易日而顺序颠倒，日级用交易日）"""
         # 验证周期
         is_valid, msg = self._validate_period(period)
         if not is_valid:
@@ -1075,7 +1504,6 @@ class CTPDataProcessor():
         
         # 解析周期类型
         period_type, num, unit = self._classify_period(period)
-
         # 选择时间基准
         if period_type == "intraday":
             time_col = "ctp_datetime"
@@ -1084,54 +1512,94 @@ class CTPDataProcessor():
         else:
             time_col = "trading_day"
             tick_df = tick_df.with_columns(polars.col(time_col).cast(polars.Date).alias(time_col))
-
+            
+        filtered_ticks = tick_df
         # 过滤必要Tick
-        filtered_ticks = self._filter_needed_ticks(tick_df, time_col, period, self.max_kline_count[instrument_id][period], instrument_id)
+        #filtered_ticks = self._filter_needed_ticks(tick_df, time_col, period, self.max_kline_count[instrument_id][period], instrument_id)
         self.max_tick_count[instrument_id] = max(self.max_tick_count[instrument_id], len(filtered_ticks))
         # 生成K线
         if period_type == "intraday":
+            # 日内周期：用group_by_dynamic的边界列作为period_start/period_end,trading_day交易日内通过时间偏移选择可合成K线的足量tick
             kline_df = (
                 filtered_ticks.group_by_dynamic(
-                    time_col, by="InstrumentID", every=period, closed="left", include_boundaries=True
+                    time_col, group_by=["InstrumentID","trading_day"], #按交易日分组
+                    every=period, #定义窗口大小和对齐方式
+                    period=period, # 明确窗口长度 = 步长
+                    closed="left",   # 包含边界包含跳空（比如 09:00:00 < t <= 09:05:00）
+                    label="left",
+                    include_boundaries=True,
+                    start_by="window",  # # 从 1970-01-01 00:00:00 对齐（自然时间）
+                    offset="0s"  #  无偏移
                 )
-                .agg(self._get_kline_aggs(time_col))
+                .agg(self._get_kline_aggs(time_col, is_cumulative_volume=True))
+                # 重命名边界列为周期起止时间 
+                .rename({
+                    f"_lower_boundary": "period_start",
+                    f"_upper_boundary": "period_end"
+                })
                 .with_columns(polars.lit(period).alias("period"))
-                .sort(time_col)
+                # 补充kline_start/end_time（和period_start/end一致 ）
+                #.with_columns([
+                #    polars.col("period_start").alias("kline_start_time"),
+                #    polars.col("period_end").alias("kline_end_time")
+                #])
+                .sort("period_start")
             )
         else:
+            # 转换为datetime（比如 2025-01-01 → 2025-01-01 00:00:00）
+            filtered_ticks = filtered_ticks.with_columns(polars.col(time_col).cast(polars.Datetime).alias(f"{time_col}_dt"))
+            time_col = f"{time_col}_dt"  # 后续用这个datetime列做聚合
             kline_df = (
+                #按品种和交易日分组
                 filtered_ticks.group_by([polars.col("InstrumentID"), polars.col(time_col).alias("kline_date")])
-                .agg(self._get_kline_aggs(time_col))
+                .agg(self._get_kline_aggs(time_col, is_cumulative_volume=True))
                 .with_columns([
                     polars.lit(period).alias("period"),
-                    polars.col("kline_date").alias("kline_start_time"),
-                    polars.col("kline_date").alias("kline_end_time")
-                ])
-                .sort("kline_date")
-            )
-        
-        # 限制数量
-        return kline_df.tail(kline_count) if len(kline_df) > kline_count else kline_df
+                    # period_start：当日0点
+                    polars.col("kline_date").dt.truncate("1d").alias("period_start"),
+                    # period_end：次日0点（日级周期的结束时间）
+                    (polars.col("kline_date").dt.truncate("1d") + polars.duration(days=1)).alias("period_end"),
+                    polars.col("kline_start_time").alias("ctp_datetime"),
 
-    def _get_kline_aggs(self, time_col: str) -> List:
-        """K线聚合逻辑"""
-        return [
-            polars.col("LastPrice").first().alias("open"),
-            polars.col("LastPrice").max().alias("high"),
-            polars.col("LastPrice").min().alias("low"),
-            polars.col("LastPrice").last().alias("close"),
-            (polars.col("Volume").last() - polars.col("Volume").first()).alias("Volume"),
-            (polars.col("Turnover").last() - polars.col("Turnover").first()).alias("Turnover"),
-            polars.col("OpenInterest").last().alias("OpenInterest"),
-            polars.col(time_col).first().alias("period_start"),
-            polars.col(time_col).last().alias("period_end")
-        ]
+                ])
+                .sort("period_start")
+            )
+        # 限制数量
+        #print(filtered_ticks.select(['ctp_datetime','trading_day','LastPrice']).tail(10))
+        #print(kline_df.select(['ctp_datetime','kline_start_time','kline_end_time','open','close','Volume']))
+        return kline_df#.tail(kline_count) if len(kline_df) > kline_count else kline_df
+
+    def _get_kline_aggs(self, time_col: str, is_cumulative_volume: bool = True) -> List:
+        """K线聚合逻辑,所包含的列名"""
+        aggs = [
+                #polars.col("ctp_datetime").first().alias("ctp_datetime"),
+                polars.col("LastPrice").first().alias("open"),
+                polars.col("LastPrice").max().alias("high"),
+                polars.col("LastPrice").min().alias("low"),
+                polars.col("LastPrice").last().alias("close"),
+                #(polars.col("Volume").last() - polars.col("Volume").first()).alias("Volume"),
+                #(polars.col("Turnover").last() - polars.col("Turnover").first()).alias("Turnover"),
+                polars.col("OpenInterest").last().alias("OpenInterest"),
+                polars.col("AveragePrice").last().alias("AveragePrice"),
+                polars.col("ctp_datetime").first().alias("kline_start_time"),
+                polars.col("ctp_datetime").last().alias("kline_end_time"),
+                #polars.col("trading_day").first().alias("trading_day")
+            ]
+        # 成交量/成交额：区分累计值和增量值（核心修复）
+        if is_cumulative_volume:
+            # 累计值：用最后值 - 第一个值（比如CTP的Volume是累计值）
+            aggs.append((polars.col("Volume").last() - polars.col("Volume").first()).alias("Volume"))
+            aggs.append((polars.col("Turnover").last() - polars.col("Turnover").first()).alias("Turnover"))
+        else:
+            # 增量值：用sum（比如部分数据源的Tick Volume是单次成交量）
+            aggs.append(polars.col("Volume").sum().alias("Volume"))
+            aggs.append(polars.col("Turnover").sum().alias("Turnover"))
+        return aggs
 
     def _filter_needed_ticks(self, tick_df: polars.DataFrame, time_col: str, period: str, kline_count: int,instrument_id="") -> polars.DataFrame:
         """过滤生成K线所需的Tick数据"""
         if len(tick_df) == 0:
             return tick_df
-        
         period_type, num, unit = self._classify_period(period)
         buffer_periods = 2
         total_offset_value = num * (kline_count + buffer_periods)
@@ -1141,21 +1609,34 @@ class CTPDataProcessor():
 
         # 计算最早保留时间（加缓冲避免边界丢失）
         if period_type == "intraday":
-            # 日内周期：用pl.duration计算固定时间偏移
+            # 日内周期：用polars.duration计算固定时间偏移
             duration_param = self._get_duration_param(unit, total_offset_value)
             earliest_expr = polars.lit(latest_time) - polars.duration(** duration_param)  # 传入合法参数
             earliest_time = tick_df.select(earliest_expr).item()
         else:
             days_per_unit = {"d": 1, "w": 7, "M": 30, "y": 365}.get(unit, 1)
             earliest_time = latest_time - timedelta(days=total_offset_value * days_per_unit)
+        #print((tick_df,88888888888,tick_df.select(polars.col(time_col).max()).item(),tick_df.select(polars.col(time_col).min()).item()))
+        #print((tick_earliest_time, earliest_time))
         if tick_earliest_time > earliest_time: #数据量不足重新读取本地数据
             #instrument_id = tick_df.tail(1).get_column("InstrumentID").item()
-            self._load_instrument_data(instrument_id)
+            #self._load_instrument_data(instrument_id)
             tick_df = self.tick_cache[instrument_id].data
-            
-        return tick_df.filter(polars.col(time_col) >= earliest_time)
+        #print(tick_df)
+        #if latest_time.time() in [time(9, 0), time(9, 5), time(9, 10), time(9, 15), time(9, 20, 0)]:
+        #    print((latest_time,123213213212132123132132123))
+        cond = (
+            ((polars.col("ctp_datetime").dt.hour() == 9) & (polars.col("ctp_datetime").dt.minute() == 0)) |
+            ((polars.col("ctp_datetime").dt.hour() == 9) & (polars.col("ctp_datetime").dt.minute() == 5)) |
+            ((polars.col("ctp_datetime").dt.hour() == 9) & (polars.col("ctp_datetime").dt.minute() == 10)) |
+            ((polars.col("ctp_datetime").dt.hour() == 9) & (polars.col("ctp_datetime").dt.minute() == 15))
+            )
+        #print((tick_df.filter(cond),8888888888888888))
+        tick = tick_df#.filter(polars.col(time_col) >= earliest_time)
+        #print((tick.filter(cond),99999999999))
+        return tick
 
-    def _update_kline(self, instrument_id: str, period: str, kline_count: int  ) -> None:
+    def _update_kline(self, instrument_id: str, period: str, tick_df: polars.DataFrame, kline_count: int  ):
         """更新K线缓存"""
         if instrument_id not in self.tick_cache:
             return
@@ -1166,74 +1647,90 @@ class CTPDataProcessor():
         if period not in self.kline_cache[instrument_id]:
             self.kline_cache[instrument_id][period] = MutableKlineHolder()
 
-        # 获取数据
-        tick_holder = self.tick_cache[instrument_id]
-        tick_df = tick_holder.data
         kline_holder = self.kline_cache[instrument_id][period]
-        current_kline = kline_holder.data
-
-        # 首次生成
-        if len(current_kline) == 0:
-            new_kline = self.generate_any_period_kline(instrument_id, tick_df, period, kline_count)
+        if kline_holder.data.is_empty():
+            new_kline = self.generate_any_period_kline(instrument_id,tick_df,period,kline_count)
             kline_holder.data = new_kline
-            self._save_kline_to_file(instrument_id, period, new_kline)
-            return
-
-        # 增量更新
-        period_type, _, _ = self._classify_period(period)
-        time_col = "ctp_datetime" if period_type == "intraday" else "trading_day"
-        latest_period_end = current_kline.select(polars.col("period_end").max()).item()
-        new_ticks = tick_df.filter(polars.col(time_col) > latest_period_end)
-
-        if len(new_ticks) == 0:
-            return
-
-        new_klines = self.generate_any_period_kline(instrument_id, new_ticks, period, kline_count + 5)
-        if len(new_klines) == 0:
-            return
+        else:
+            latest_time = tick_df["ctp_datetime"][-1]#.max()
+            last_kline = kline_holder.data.tail(1)
+            if latest_time < last_kline["period_end"][-1]:
+                # 成交量：CTP 是累计值，需特殊处理
+                needs_tick_df = self.tick_cache[instrument_id].data.filter(polars.col("ctp_datetime")>=last_kline["kline_start_time"][-1])
+                new_kline = self.generate_any_period_kline(instrument_id,needs_tick_df,period,kline_count)
+                kline_holder.data = kline_holder.data.vstack(new_kline).unique(subset=["period_start"], keep="last").sort("period_start")
+            else:
+                new_kline = self.generate_any_period_kline(instrument_id,tick_df,period,kline_count)
+                #if self.backtest is None:
+                kline_holder.data = kline_holder.data.vstack(new_kline).tail(self.max_kline_count[instrument_id][period])
+                #else: kline_holder.data = kline_holder.data.vstack(new_kline)
         
-        # 合并并去重
-        combined_kline = current_kline.vstack(new_klines).unique(subset=["period_start"], keep="last")
-        combined_kline = combined_kline.sort("period_start")
-        if len(combined_kline) > kline_count:
-            combined_kline = combined_kline.tail(kline_count)
 
-        # 更新容器
-        kline_holder.data = combined_kline
-        self._save_kline_to_file(instrument_id, period, combined_kline)
-
-    # K线持久化（双格式支持）
+    # K线持久化（支持parquet/csv/duckdb）
     def _save_kline_to_file(self, instrument_id: str, period: str, kline_df: polars.DataFrame) -> None:
-        return
-        """保存K线到文件"""
+        """保存K线到文件（DuckDB格式暂复用Parquet逻辑，可按需扩展）"""
         file_path = self._get_kline_file_path(instrument_id, period)
-
-        # 格式化时间字段
+        
+        # 格式化时间字段（修复核心：给lit(None)指定别名+类型）
         formatted_df = kline_df.with_columns([
+            # 必选列：直接转换
             polars.col("period_start").cast(polars.String).alias("period_start"),
             polars.col("period_end").cast(polars.String).alias("period_end"),
-            polars.col("kline_start_time").cast(polars.String).alias("kline_start_time") 
-            if "kline_start_time" in kline_df.columns else polars.lit(None),
-            polars.col("kline_end_time").cast(polars.String).alias("kline_end_time")
-            if "kline_end_time" in kline_df.columns else polars.lit(None)
+            # 可选列1：kline_start_time（列不存在时返回null，显式指定别名+类型）
+            polars.when(polars.col("kline_start_time").is_not_null())
+            .then(polars.col("kline_start_time").cast(polars.String))
+            .otherwise(polars.lit(None, dtype=polars.String))
+            .alias("kline_start_time") if "kline_start_time" in kline_df.columns 
+            else polars.lit(None, dtype=polars.String).alias("kline_start_time"),
+            # 可选列2：kline_end_time（同上，避免列名重复）
+            polars.when(polars.col("kline_end_time").is_not_null())
+            .then(polars.col("kline_end_time").cast(polars.String))
+            .otherwise(polars.lit(None, dtype=polars.String))
+            .alias("kline_end_time") if "kline_end_time" in kline_df.columns 
+            else polars.lit(None, dtype=polars.String).alias("kline_end_time")
         ])
 
-        # 按格式保存
+        # 按格式保存（保持原有逻辑）
         if self.storage_format == "parquet":
             formatted_df.write_parquet(file_path)
-        else:
-            include_header = not os.path.exists(file_path)
-            with open(file_path, "a", encoding="utf-8") as f:
-                formatted_df.write_csv( f, include_header=include_header )
-
+        elif self.storage_format == "csv":
+            include_header = True #not os.path.exists(file_path)
+            with open(file_path, "w", encoding="utf-8") as f:
+                formatted_df.write_csv(f, include_header=include_header)
+        elif self.storage_format == "duckdb":
+            # K线的DuckDB存储：为每个合约+周期创建独立文件
+            kline_db_path = file_path.replace(f".{self.storage_format}", ".duckdb")
+            conn = duckdb.connect(kline_db_path, read_only=False)
+            # 确保kline表存在（补充字段兼容kline_start/end_time）
+            conn.execute("""
+            CREATE TABLE IF NOT EXISTS klines (
+                InstrumentID VARCHAR,
+                open DOUBLE,
+                high DOUBLE,
+                low DOUBLE,
+                close DOUBLE,
+                Volume BIGINT,
+                Turnover DOUBLE,
+                OpenInterest DOUBLE,
+                period_start TIMESTAMP,
+                period_end TIMESTAMP,
+                period VARCHAR,
+                kline_start_time TIMESTAMP,  -- 补充可选字段
+                kline_end_time TIMESTAMP     -- 补充可选字段
+            )
+            """)
+            # 写入数据
+            conn.register("new_klines", formatted_df)
+            conn.execute("INSERT INTO klines SELECT * FROM new_klines")
+            conn.close()
     # 数据获取接口
     def get_tick_holder(self, instrument_id: str) -> Optional[MutableTickHolder]:
         """获取Tick可变容器（外部通过容器获取最新数据）"""
         if instrument_id not in self.max_tick_count: self.max_tick_count[instrument_id] = 10000
         if instrument_id not in self.tick_cache:
-            self._load_instrument_data(instrument_id)
+            self._load_instrument_data(instrument_id,n=100)
         if instrument_id not in self.tick_cache: self.tick_cache[instrument_id] = MutableTickHolder()  
-        type(self.tick_cache[instrument_id]),id(self.tick_cache[instrument_id]) 
+        #type(self.tick_cache[instrument_id]),id(self.tick_cache[instrument_id]) 
         return self.tick_cache[instrument_id]#.tail(tick_count)
 
     def get_kline_holder(self, instrument_id: str, period: str, kline_count:int) -> Optional[MutableKlineHolder]:
@@ -1252,42 +1749,106 @@ class CTPDataProcessor():
         if instrument_id not in self.kline_periods: #缓存中无周期则添加
             self.kline_periods[instrument_id] = set()
         self.kline_periods[instrument_id].add(period)
-        if instrument_id not in self.tick_cache: #缓存中无tick尝试从本地读取
-            self._load_instrument_data(instrument_id)
-        if instrument_id in self.tick_cache:
+        #初始化时已预加载tick
+        #if instrument_id not in self.tick_cache: #缓存中无tick尝试从本地读取
+        #    self._load_instrument_data(instrument_id)
+        if instrument_id in self.tick_cache and not self.tick_cache[instrument_id].data.is_empty():
             # 生成K线
-            kline_data = self.generate_any_period_kline(instrument_id, self.tick_cache[instrument_id].data, period, kline_count)
-            kline_holder.data = kline_data
-        else:
+            if self.backtest is None:
+                latest_time = min((self.tick_cache[instrument_id].data)["ctp_datetime"][-1],datetime.now())#.max()
+            else:
+                latest_time = min((self.tick_cache[instrument_id].data)["ctp_datetime"][-1],self.backtest.start_datetime)#.max()
+            earliest_time = self._calculate_earliest_time(latest_time, period, kline_count)
+            tick_file = self._get_tick_file_path(instrument_id)
+            needed_ticks = self._load_ticks_since(tick_file,self.storage_format, earliest_time)
+            if self.backtest is None:
+                needed_ticks = needed_ticks.filter(polars.col("ctp_datetime") <= datetime.now())
+            else:
+                needed_ticks = needed_ticks.filter(polars.col("ctp_datetime") <= self.backtest.start_datetime)
+            if not needed_ticks.is_empty():
+                kline_data = self.generate_any_period_kline(instrument_id, needed_ticks, period, kline_count)
+                #kline_data = self.generate_any_period_kline(instrument_id, self.tick_cache[instrument_id].data, period, kline_count)
+                kline_holder.data = kline_data
+        elif instrument_id not  in self.tick_cache:
             tick_holder = MutableTickHolder() #创建空tick
             self.tick_cache[instrument_id] = tick_holder
         #kline =  self.kline_cache.get(instrument_id, {}).get(period)    
         return self.kline_cache[instrument_id][period]
 
-    def _load_instrument_data(self, instrument_id: str) -> None:
-        """懒加载指定合约数据"""
-        tick_file = self._get_tick_file_path(instrument_id)
-        if not os.path.exists(tick_file):
-            print(f"未找到 {instrument_id} 的本地文件")
-            return
-
+    def _load_instrument_data(self, instrument_id: str,n=100) -> None:
+        """加载单个合约的历史数据（适配所有存储格式）"""
         try:
-            # 加载Tick
-            tick_df = self._read_tick_file(tick_file)
-            if instrument_id in self.tick_cache and isinstance(self.tick_cache[instrument_id],MutableTickHolder): self.tick_cache[instrument_id].data = tick_df
+            if self.storage_format == "duckdb":
+                # DuckDB格式：从合约专属文件读取
+                tick_df = self._read_tick_file(instrument_id)
+            else:
+                # Parquet/CSV格式：从文件路径读取
+                tick_file = self._get_tick_file_path(instrument_id)
+                if not os.path.exists(tick_file):
+                    print(f"未找到 {instrument_id} 的本地文件")
+                    return
+                #tick_df = self._read_tick_file(tick_file)
+                tick_df = self._peek_latest_ticks(tick_file, format=self.storage_format, n=n)
+
+            if self.backtest is None:
+                tick_df = tick_df.filter(polars.col("ctp_datetime") <= datetime.now())
+            else:
+                tick_df = tick_df.filter(polars.col("ctp_datetime") <= self.backtest.start_datetime)
+            # 更新缓存
+            if instrument_id in self.tick_cache:
+                combined = polars.concat([tick_df, self.tick_cache[instrument_id].data])
+                combined = combined.unique(subset=["ctp_datetime"], keep="last").sort("ctp_datetime")
+                self.tick_cache[instrument_id].data = combined
             else:
                 tick_holder = MutableTickHolder()
                 tick_holder.data = tick_df
                 self.tick_cache[instrument_id] = tick_holder
-            
-            #print(f"懒加载 {instrument_id} 数据：{len(tick_df)} 条Tick")
-
+                
         except Exception as e:
-            print(f"懒加载 {instrument_id} 失败：{str(e)}")
+            print(f"加载 {instrument_id} 失败：{str(e)}")
+            if instrument_id not in self.tick_cache:
+                self.tick_cache[instrument_id] = MutableTickHolder()
 
     def get_latest_realtime_tick(self, instrument_id: str) -> Optional[polars.DataFrame]:
         """快捷获取最新Tick"""
         tick_holder = self.get_tick_holder(instrument_id)
         return tick_holder.tail(1) if tick_holder else None
+
+    def export_instrument_to_csv(self, instrument_id: str, output_dir: str = ".") -> str:
+        """导出某合约 tick 到 CSV（用于人工查看）"""
+        df = self._read_tick_file(instrument_id)
+        path = os.path.join(output_dir, f"{instrument_id}_tick_export.csv")
+        df.write_csv(path)
+        return path
+
+    def export_instrument_to_parquet(self, instrument_id: str, output_dir: str = ".") -> str:
+        """导出到 Parquet（压缩高效）"""
+        df = self._read_tick_file(instrument_id)
+        path = os.path.join(output_dir, f"{instrument_id}_tick_export.parquet")
+        df.write_parquet(path, compression="zstd")
+        return path
+
+    def close_connections(self):
+        """关闭所有DuckDB连接"""
+        for conn in self.duckdb_connections.values():
+            try:
+                conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")  # 清理WAL
+                conn.close()
+            except:
+                pass
+        self.duckdb_connections.clear()
+
+    def __del__(self):
+        self.flush_batch_cache()
+        self.close_connections()
+    def flush_batch_cache(self):
+        """刷入剩余的批量缓存数据"""
+        for instrument_id, records in self.tick_batch_cache.items():
+            if len(records) > 0:
+                tick_df = polars.DataFrame(records)
+                self._append_ticks_batch(instrument_id, tick_df)
+                self.tick_batch_cache[instrument_id].clear()
+
+
 
 

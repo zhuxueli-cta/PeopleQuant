@@ -27,115 +27,6 @@ def logs_txt(e,logfile):
     ff.write(e)
     ff.close()
 
-class TqChan(asyncio.Queue):
-
-    def __init__(self, loop, last_only: bool = False, chan_name: str = "") -> None:
-        """
-        创建channel实例
-        Args:
-            last_only (bool): 为True时只存储最后一个发送到channel的对象
-        """
-        #loop = asyncio.SelectorEventLoop()
-        #asyncio.set_event_loop(loop)
-        py_ver = sys.version_info
-        asyncio.Queue.__init__(self, loop=loop) if (py_ver.major == 3 and py_ver.minor < 10) else asyncio.Queue.__init__(self)
-        self._last_only = last_only
-        self._closed = False
-
-    async def close(self) -> None:
-        """
-        关闭channel
-        关闭后send将不起作用,recv在收完剩余数据后会立即返回None
-        """
-        if not self._closed:
-            self._closed = True
-            await asyncio.Queue.put(self, None)
-
-    async def send(self, item: Any) -> None:
-        """
-        异步发送数据到channel中
-        Args:
-            item (any): 待发送的对象
-        """
-        if not self._closed:
-            if self._last_only:
-                while not self.empty():
-                    asyncio.Queue.get_nowait(self)
-            await asyncio.Queue.put(self, item)
-
-    def send_nowait(self, item: Any) -> None:
-        """
-        尝试立即发送数据到channel中
-        Args:
-            item (any): 待发送的对象
-        Raises:
-            asyncio.QueueFull: 如果channel已满则会抛出 asyncio.QueueFull
-        """
-        if not self._closed:
-            if self._last_only:
-                while not self.empty():
-                    asyncio.Queue.get_nowait(self)
-            asyncio.Queue.put_nowait(self, item)
-
-    async def recv(self) -> Any:
-        """
-        异步接收channel中的数据，如果channel中没有数据则一直等待
-        Returns:
-            any: 收到的数据，如果channel已被关闭则会立即收到None
-        """
-        if self._closed and self.empty():
-            return None
-        item = await asyncio.Queue.get(self)
-        return item
-
-    def recv_nowait(self) -> Any:
-        """
-        尝试立即接收channel中的数据
-        Returns:
-            any: 收到的数据，如果channel已被关闭则会立即收到None
-        Raises:
-            asyncio.QueueFull: 如果channel中没有数据则会抛出 asyncio.QueueEmpty
-        """
-        if self._closed and self.empty():
-            return None
-        item = asyncio.Queue.get_nowait(self)
-        return item
-
-    def recv_latest(self, latest: Any) -> Any:
-        """
-        尝试立即接收channel中的最后一个数据
-        Args:
-            latest (any): 如果当前channel中没有数据或已关闭则返回该对象
-        Returns:
-            any: channel中的最后一个数据
-        """
-        while (self._closed and self.qsize() > 1) or (not self._closed and not self.empty()):
-            latest = asyncio.Queue.get_nowait(self)
-        return latest
-
-    def clear(self):
-        """
-        清空channel中的数据
-        """
-        while not self.empty():
-            asyncio.Queue.get_nowait(self)
-        #self._FTDdeque.clear()
-        #self._FTDdeque.append(0)  #请求时间重置
-
-    def __aiter__(self):
-        return self
-
-    async def __anext__(self):
-        value = await asyncio.Queue.get(self)
-        if self._closed and self.empty():
-            raise StopAsyncIteration
-        return value
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, exc_type, exc, tb):
-        await self.close()
 
 class ThreadChan(queue.Queue):
 
@@ -155,78 +46,7 @@ class ThreadChan(queue.Queue):
             self._OrderActionProduct = {} #记录每个品种的撤单时间
             self._ex_order_exe = {} #session层级交易所总报撤单时间
 
-    def close(self) -> None:
-        """
-        关闭channel
-        关闭后send将不起作用,recv在收完剩余数据后会立即返回None
-        """
-        if not self._closed:
-            self._closed = True
-            self.put(None)
-            
 
-    def send(self, item: Any) -> None:
-        """
-        异步发送数据到channel中
-        Args:
-            item (any): 待发送的对象
-        """
-        if not self._closed:
-            if self._last_only:
-                while not self.empty():
-                    self.get_nowait()
-            self.put(item)
-
-    def send_nowait(self, item: Any) -> None:
-        """
-        尝试立即发送数据到channel中
-        Args:
-            item (any): 待发送的对象
-        Raises:
-            QueueFull: 如果channel已满则会抛出 QueueFull
-        """
-        if not self._closed:
-            if self._last_only:
-                while not self.empty():
-                    self.get_nowait()
-            self.put_nowait( item)
-
-    def recv(self) -> Any:
-        """
-        异步接收channel中的数据，如果channel中没有数据则一直等待
-        Returns:
-            any: 收到的数据，如果channel已被关闭则会立即收到None
-        """
-        if self._closed and self.empty():
-            return None
-        item = self.get()
-        return item
-
-    def recv_nowait(self) -> Any:
-        """
-        尝试立即接收channel中的数据
-        Returns:
-            any: 收到的数据，如果channel已被关闭则会立即收到None
-        Raises:
-            QueueFull: 如果channel中没有数据则会抛出 QueueEmpty
-        """
-        if self._closed and self.empty():
-            return None
-        item = self.get_nowait()
-        return item
-
-    def recv_latest(self, latest: Any) -> Any:
-        """
-        尝试立即接收channel中的最后一个数据
-        Args:
-            latest (any): 如果当前channel中没有数据或已关闭则返回该对象
-        Returns:
-            any: channel中的最后一个数据
-        """
-        while (self._closed and self.qsize() > 1) or (not self._closed and not self.empty()):
-            latest = self.get_nowait()
-        return latest
-    
     def clear(self):
         """
         清空channel中的数据
@@ -364,77 +184,6 @@ class ProcessChan(multiprocessing.queues.Queue):
         self._last_only = last_only
         self._closed = False
 
-    def close(self) -> None:
-        """
-        关闭channel
-        关闭后send将不起作用,recv在收完剩余数据后会立即返回None
-        """
-        if not self._closed:
-            self._closed = True
-            self.put( None)
-
-    def send(self, item: Any) -> None:
-        """
-        异步发送数据到channel中
-        Args:
-            item (any): 待发送的对象
-        """
-        if not self._closed:
-            if self._last_only:
-                while not self.empty():
-                    self.get_nowait()
-            self.put(item)
-
-    def send_nowait(self, item: Any) -> None:
-        """
-        尝试立即发送数据到channel中
-        Args:
-            item (any): 待发送的对象
-        Raises:
-            QueueFull: 如果channel已满则会抛出 QueueFull
-        """
-        if not self._closed:
-            if self._last_only:
-                while not self.empty():
-                    self.get_nowait()
-            self.put_nowait(item)
-
-    def recv(self) -> Any:
-        """
-        异步接收channel中的数据，如果channel中没有数据则一直等待
-        Returns:
-            any: 收到的数据，如果channel已被关闭则会立即收到None
-        """
-        if self._closed and self.empty():
-            return None
-        item = self.get()
-        return item
-
-    def recv_nowait(self) -> Any:
-        """
-        尝试立即接收channel中的数据
-        Returns:
-            any: 收到的数据，如果channel已被关闭则会立即收到None
-        Raises:
-            QueueFull: 如果channel中没有数据则会抛出 QueueEmpty
-        """
-        if self._closed and self.empty():
-            return None
-        item = self.get_nowait()
-        return item
-
-    def recv_latest(self, latest: Any) -> Any:
-        """
-        尝试立即接收channel中的最后一个数据
-        Args:
-            latest (any): 如果当前channel中没有数据或已关闭则返回该对象
-        Returns:
-            any: channel中的最后一个数据
-        """
-        while (self._closed and self.qsize() > 1) or (not self._closed and not self.empty()):
-            latest = self.get_nowait()
-        return latest
-    
     def __iter__(self):
         return self
 
@@ -472,6 +221,8 @@ class WorkThread(threading.Thread):
         self._api = _api
         self._stopped = False  # 终止标志
         self._closed = False   # ThreadChan关闭标志
+        self.result = None
+        self.done = False
 
     def _generate_name(self, target, name_prefix):
         """生成自动线程名的核心逻辑"""
@@ -498,7 +249,8 @@ class WorkThread(threading.Thread):
     def run(self):
         try:
             # 执行目标函数（如TraderApi、_rtn_thread）
-            self.api = self.target(*self.args,**self.kwargs)
+            self.result = self.api = self.target(*self.args,**self.kwargs)
+            self.done = True
             # 如果是CTP API实例，等待其内部循环结束
             if self._api is True and self.api is not None: self.api._Join()
         except:

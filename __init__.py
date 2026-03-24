@@ -2,7 +2,16 @@
 #  -*- coding: utf-8 -*-
 import sys
 import os
-# 获取当前脚本所在目录
-current_dir = os.path.dirname(os.path.abspath(__file__))
-if current_dir not in sys.path:
-    sys.path.insert(0, current_dir)  # 插入到最前面，优先搜索
+# 获取当前脚本的绝对路径
+current_path = os.path.abspath(__file__)
+# 每调用一次 os.path.dirname() 就向上一层
+peoplequant_dir = os.path.dirname(current_path)      # PeopleQuant 目录
+parent_dir = os.path.dirname(peoplequant_dir)    # 再上层：目标父目录
+# 将根目录添加到 sys.path
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
+
+from peoplequant.pqctp import PeopleQuantApi
+from peoplequant.zhuchannel import ThreadChan,WorkThread,PygameAudioPlayer
+from peoplequant.zhustruct import Account,Order,Quote,Trade,Position,InstrumentProperty
+from peoplequant.backtest.backtest import BackTest

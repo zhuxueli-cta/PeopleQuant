@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 #  -*- coding: utf-8 -*-
-from trade_mdforopenctp import PeopleQuantApi 
+from peoplequant.pqctp import PeopleQuantApi 
 import time as tm
-import zhuchannel
+from peoplequant import zhuchannel
 import os
 import asyncio
 import traceback
