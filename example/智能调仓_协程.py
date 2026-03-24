@@ -4,13 +4,13 @@ import sys
 import os
 # 获取当前脚本的绝对路径
 current_path = os.path.abspath(__file__)
-root_path = os.path.abspath(os.path.join(current_path, "../../"))
+root_path = os.path.abspath(os.path.join(current_path, "../../../"))
 # 将根目录添加到 sys.path
 if root_path not in sys.path:
-    sys.path.append(root_path)
-from trade_mdforopenctp import PeopleQuantApi
+    sys.path.insert(0,root_path)
+from peoplequant.pqctp import PeopleQuantApi 
 import time as tm
-import zhuchannel
+from peoplequant import zhuchannel
 import asyncio
 import traceback
 import types
@@ -49,7 +49,7 @@ PASSWORD=""   #登录密码
 APPID="simnow_client_test"   #客户端ID
 AUTHCODE="0000000000000000"  #授权码
 
-async def cta(loop,symbol_ctp ):
+async def cta(loop:asyncio.AbstractEventLoop,symbol_ctp ):
     #获取合约行情
     quote1 = await loop.create_task(pqapi.async_wrapper(pqapi.get_quote,symbol_ctp ))
     position1 = pqapi.get_position(symbol_ctp)   #获取合约持仓

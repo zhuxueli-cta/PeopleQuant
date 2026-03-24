@@ -4,13 +4,13 @@ import sys
 import os
 # 获取当前脚本的绝对路径
 current_path = os.path.abspath(__file__)
-root_path = os.path.abspath(os.path.join(current_path, "../../"))
+root_path = os.path.abspath(os.path.join(current_path, "../../../"))
 # 将根目录添加到 sys.path
 if root_path not in sys.path:
-    sys.path.append(root_path)
-from trade_mdforopenctp import PeopleQuantApi 
+    sys.path.insert(0,root_path)
+from peoplequant.pqctp import PeopleQuantApi 
 import time as tm
-import zhuchannel
+from peoplequant import zhuchannel
 import json
 import asyncio,threading
 import traceback
@@ -79,6 +79,12 @@ APPID="simnow_client_test"   #客户端ID
 AUTHCODE="0000000000000000"  #授权码
 
 def cta(name,product_id,symbols, **kw ):
+    '''
+    name: 策略名
+    product_id: 合约id
+    symbols: 品种参数
+    kw: 权益、风险度等扩展参数
+    '''
     symbol = symbols[product_id]["strategy"][name]["symbol"]
     quote1 = pqapi.get_quote(symbol)        #获取合约行情
     symbole_info = pqapi.get_symbol_info(symbol) #获取合约属性

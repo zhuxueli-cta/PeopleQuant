@@ -4,13 +4,13 @@ import sys
 import os
 # 获取当前脚本的绝对路径
 current_path = os.path.abspath(__file__)
-root_path = os.path.abspath(os.path.join(current_path, "../../"))
+root_path = os.path.abspath(os.path.join(current_path, "../../../"))
 # 将根目录添加到 sys.path
 if root_path not in sys.path:
-    sys.path.append(root_path)
-from trade_mdforopenctp import PeopleQuantApi
+    sys.path.insert(0,root_path)
+from peoplequant.pqctp import PeopleQuantApi 
 import time as tm
-import zhuchannel
+from peoplequant import zhuchannel
 import asyncio
 import traceback
 import types
