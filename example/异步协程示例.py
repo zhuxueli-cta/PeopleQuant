@@ -4,13 +4,13 @@ import sys
 import os
 # 获取当前脚本的绝对路径
 current_path = os.path.abspath(__file__)
-root_path = os.path.abspath(os.path.join(current_path, "../../"))
+root_path = os.path.abspath(os.path.join(current_path, "../../../"))
 # 将根目录添加到 sys.path
 if root_path not in sys.path:
-    sys.path.append(root_path)
-from trade_mdforopenctp import PeopleQuantApi
+    sys.path.insert(0,root_path)
+from peoplequant.pqctp import PeopleQuantApi 
 import time as tm
-import zhuchannel
+from peoplequant import zhuchannel
 import asyncio
 import traceback
 import types
@@ -103,7 +103,7 @@ async def cta(symbol_ctp ):
             if position1.pos_short and abs(quote1.LastPrice - position1.open_price_short) >= 2:
                 price = quote1["AskPrice1"]
                 r = await loop.create_task(pqapi.OpenClose(symbol_ctp,"pingkong",lot,price))
-        await asyncio.sleep(0) #关键,让出控制权,否则while死循环无法切换任务
+        await asyncio.sleep(0.001) #关键,让出控制权,否则while死循环无法切换任务
 #创建api实例
 pqapi = PeopleQuantApi(BrokerID=BROKERID, UserID=USERID, PassWord=PASSWORD, AppID=APPID, AuthCode=AUTHCODE, TradeFrontAddr=TradeFrontAddr, MdFrontAddr=MdFrontAddr, s=USERID,flowfile="")
 account = pqapi.get_account()            #获取账户资金

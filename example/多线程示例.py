@@ -4,13 +4,13 @@ import sys
 import os
 # 获取当前脚本的绝对路径
 current_path = os.path.abspath(__file__)
-root_path = os.path.abspath(os.path.join(current_path, "../../"))
+root_path = os.path.abspath(os.path.join(current_path, "../../../"))
 # 将根目录添加到 sys.path
 if root_path not in sys.path:
-    sys.path.append(root_path)
-from trade_mdforopenctp import PeopleQuantApi
+    sys.path.insert(0,root_path)
+from peoplequant.pqctp import PeopleQuantApi 
 import time as tm
-import zhuchannel
+from peoplequant import zhuchannel
 import asyncio
 import traceback
 import types
@@ -79,6 +79,9 @@ AUTHCODE="0000000000000000"  #授权码
 
 #策略函数
 def cta(symbol_ctp ):
+    '''
+    symbol_ctp: 合约码
+    '''
     quote1 = pqapi.get_quote(symbol_ctp)        #获取合约行情
     position1 = pqapi.get_position(symbol_ctp)   #获取合约持仓
     UpdateTime = quote1.ctp_datetime #行情更新时间
@@ -104,7 +107,7 @@ def cta(symbol_ctp ):
                 price = quote1["AskPrice1"]
                 r = pqapi.open_close(symbol_ctp,"pingkong",position1.pos_short,price)
                 print(r['kaiping'],r['price'],r['shoushu'],r['junjia'],position1.open_price_long,position1.open_price_short)
-                    
+        tm.sleep(0.001)            
   
 #创建api实例
 pqapi = PeopleQuantApi()
