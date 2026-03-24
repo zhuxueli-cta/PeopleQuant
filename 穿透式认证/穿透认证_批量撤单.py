@@ -4,13 +4,13 @@ import sys
 import os
 # 获取当前脚本的绝对路径
 current_path = os.path.abspath(__file__)
-root_path = os.path.abspath(os.path.join(current_path, "../../"))
+root_path = os.path.abspath(os.path.join(current_path, "../../../"))
 # 将根目录添加到 sys.path
 if root_path not in sys.path:
-    sys.path.append(root_path)
-from trade_mdforopenctp import PeopleQuantApi
+    sys.path.insert(0,root_path)
+from peoplequant.pqctp import PeopleQuantApi 
 import time as tm
-import zhuchannel
+from peoplequant import zhuchannel
 import asyncio
 import traceback
 import types
@@ -19,6 +19,8 @@ from datetime import datetime,time,date,timedelta
 import copy
 from typing import Dict, List, Optional, Tuple, Any
 
+#TradeFrontAddr="tcp://180.168.146.187:10101"   #交易前置地址
+#MdFrontAddr="tcp://101.230.209.178:53313"      #行情前置地址
 TradeFrontAddr=" "   #交易前置地址
 MdFrontAddr=" "      #行情前置地址
 BROKERID=""   #期货公司ID
@@ -36,6 +38,12 @@ symbol = 'm2601'
 quote = pqapi.get_quote(symbol)  #获取合约行情
 symbole_info = pqapi.get_symbol_info(symbol) #获取合约属性
 position = pqapi.get_position(symbol)        #获取合约持仓
+#开仓,多头1手
+r = pqapi.open_close(symbol,'kaiduo',1,quote["LowerLimitPrice"],block=False,order_info='验证重复撤单')
+pqapi.cancel_order(r['order_id'][0])  #撤单
+pqapi.cancel_order(r['order_id'][0])  #重复撤单
+pqapi.cancel_order(r['order_id'][0])  #重复撤单
+pqapi.cancel_order(r['order_id'][0])  #重复撤单
 #开仓,多头1手
 r = pqapi.open_close(symbol,'kaiduo',1,quote["LowerLimitPrice"],block=False,order_info='验证批量撤单')
 r = pqapi.open_close(symbol,'kaiduo',1,quote["LowerLimitPrice"],block=False,order_info='验证批量撤单')

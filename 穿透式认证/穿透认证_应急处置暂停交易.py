@@ -4,13 +4,13 @@ import sys
 import os
 # 获取当前脚本的绝对路径
 current_path = os.path.abspath(__file__)
-root_path = os.path.abspath(os.path.join(current_path, "../../"))
+root_path = os.path.abspath(os.path.join(current_path, "../../../"))
 # 将根目录添加到 sys.path
 if root_path not in sys.path:
-    sys.path.append(root_path)
-from trade_mdforopenctp import PeopleQuantApi
+    sys.path.insert(0,root_path)
+from peoplequant.pqctp import PeopleQuantApi 
 import time as tm
-import zhuchannel
+from peoplequant import zhuchannel
 import asyncio
 import traceback
 import types
@@ -19,6 +19,8 @@ from datetime import datetime,time,date,timedelta
 import copy
 from typing import Dict, List, Optional, Tuple, Any
 
+#TradeFrontAddr="tcp://180.168.146.187:10101"   #交易前置地址
+#MdFrontAddr="tcp://101.230.209.178:53313"      #行情前置地址
 TradeFrontAddr=" "   #交易前置地址
 MdFrontAddr=" "      #行情前置地址
 BROKERID=""   #期货公司ID
@@ -36,9 +38,9 @@ def cta(symbol_ctp,lot,**kw ):
     balance = kw["balance"] if "balance" in kw else 0  #账户最低权益
     risk_ratio = kw["risk_ratio"] if "risk_ratio" in kw else 1  #账户风险度
     #报单次数、撤单次数、多空开仓成交总手数、自成交数、信息量、重复报单数   阈值
-    orders_insert,orders_cancel,daylots,self_trade,order_exe,repeat = 4,2,500000,10000,500000,2
+    orders_insert,orders_cancel,daylots,self_trade,order_exe,repeat = 6,2,500000,10000,500000,2
     while True:
-        if UpdateTime != quote1.local_timestamp: #新行情推送
+        if 1: #新行情推送
             UpdateTime = quote1.local_timestamp
             #权益足够,风险度足够,否则只平不开
             risk_control = account["Balance"] > balance and account["risk_ratio"] < risk_ratio
@@ -52,26 +54,26 @@ def cta(symbol_ctp,lot,**kw ):
             #策略中下单逻辑,先判断报撤单、权益、风险度阈值是否满足,再判断交易信号并下单,下单错误时退出交易
             if order_enable:#报撤单等未超出阈值,可执行下单
                 if buy_up :
-                    price = quote1["AskPrice1"]
-                    r = pqapi.open_close(symbol_ctp,"kaiduo",lot,price,che_time=2,order_info='开仓')
+                    price = quote1.UpperLimitPrice
+                    r = pqapi.open_close(symbol_ctp,"kaiduo",lot,price,n_price_tick=0,che_time=2,order_info='开仓')
                     if r['shoushu']:
                         pass
                     else:
                         if r['order_wrong']: #下单错误
-                            print(f"{symbol_ctp}下单错误退出策略执行,错误信息:",r['last_msg']) #错误信息
+                            print(f"{symbol_ctp}下单错误退出策略执行,错误信息:{r['last_msg']},下单数量:{r['lot']},请修正代码错误后重新运行") #错误信息
                             return
                 elif sell_down :
-                    price = quote1["BidPrice1"]
-                    r = pqapi.open_close(symbol_ctp,"kaikong",lot,price,che_time=2,order_info='开仓')
+                    price = quote1.LowerLimitPrice
+                    r = pqapi.open_close(symbol_ctp,"kaikong",lot,price,n_price_tick=0,che_time=2,order_info='开仓')
                     if r['shoushu']:
                         pass
                     else:
                         if r['order_wrong']: #下单错误
-                            print(f"{symbol_ctp}下单错误退出策略执行,错误信息:",r['last_msg']) #错误信息
+                            print(f"{symbol_ctp}下单错误退出策略执行,错误信息:{r['last_msg']},下单数量:{r['lot']},请修正代码错误后重新运行") #错误信息
                             return
                 if position1.pos_long :
-                    price = quote1["BidPrice1"]
-                    r = pqapi.open_close(symbol_ctp,"pingduo",position1.pos_long,price,che_time=2,order_info='平仓')
+                    price = quote1.LowerLimitPrice
+                    r = pqapi.open_close(symbol_ctp,"pingduo",position1.pos_long,price,n_price_tick=0,che_time=2,order_info='平仓')
                     if r['shoushu']:
                         pass
                     else:
@@ -79,8 +81,8 @@ def cta(symbol_ctp,lot,**kw ):
                             print(f"{symbol_ctp}下单错误退出策略执行,错误信息:",r['last_msg']) #错误信息
                             return
                 if position1.pos_short :
-                    price = quote1["AskPrice1"]
-                    r = pqapi.open_close(symbol_ctp,"pingkong",position1.pos_short,price,che_time=2,order_info='平仓')
+                    price = quote1.UpperLimitPrice
+                    r = pqapi.open_close(symbol_ctp,"pingkong",position1.pos_short,price,n_price_tick=0,che_time=2,order_info='平仓')
                     if r['shoushu']:
                         pass
                     else:
