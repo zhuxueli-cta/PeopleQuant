@@ -133,115 +133,115 @@ class Account(FullDictDataClass):
         #投资者帐号
         self.AccountID = ""
         #上次质押金额
-        self.PreMortgage = 0
+        self.PreMortgage = 0.0
         #上次信用额度
-        self.PreCredit = 0
+        self.PreCredit = 0.0
         #上次存款额
-        self.PreDeposit = 0
+        self.PreDeposit = 0.0
         #上次结算准备金
-        self.PreBalance = 0
+        self.PreBalance = 0.0
         #上次占用的保证金
-        self.PreMargin = 0
+        self.PreMargin = 0.0
         #利息基数
-        self.InterestBase = 0
+        self.InterestBase = 0.0
         #利息收入
-        self.Interest = 0
+        self.Interest = 0.0
         #入金金额
-        self.Deposit = 0
+        self.Deposit = 0.0
         #出金金额
-        self.Withdraw = 0
+        self.Withdraw = 0.0
         #冻结的保证金
-        self.FrozenMargin = 0
+        self.FrozenMargin = 0.0
         #冻结的资金
-        self.FrozenCash = 0
+        self.FrozenCash = 0.0
         #冻结的手续费
-        self.FrozenCommission = 0
+        self.FrozenCommission = 0.0
         #当前保证金总额
-        self.CurrMargin = 0
+        self.CurrMargin = 0.0
         #资金差额
-        self.CashIn = 0
+        self.CashIn = 0.0
         #手续费
-        self.Commission = 0
+        self.Commission = 0.0
         #平仓盈亏,不含期权平仓盈亏
-        self.CloseProfit = 0
+        self.CloseProfit = 0.0
         #持仓盈亏,不含期权盈亏
-        self.PositionProfit = 0
+        self.PositionProfit = 0.0
         #期货结算准备金,动态权益,不含期权市值
-        self.Balance = 0
+        self.Balance = 0.0
         #可用资金
-        self.Available = 0
+        self.Available = 0.0
         #可取资金
-        self.WithdrawQuota = 0
+        self.WithdrawQuota = 0.0
         #基本准备金
-        self.Reserve = 0
+        self.Reserve = 0.0
         #交易日
-        self.TradingDay = 0
+        self.TradingDay = ""
         #结算编号
         self.SettlementID = ""
         #信用额度
-        self.Credit = 0
+        self.Credit = 0.0
         #质押金额
-        self.Mortgage = 0
+        self.Mortgage = 0.0
         #交易所保证金
-        self.ExchangeMargin = 0
+        self.ExchangeMargin = 0.0
         #投资者交割保证金
-        self.DeliveryMargin = 0
+        self.DeliveryMargin = 0.0
         #交易所交割保证金
-        self.ExchangeDeliveryMargin = 0
+        self.ExchangeDeliveryMargin = 0.0
         #保底期货结算准备金
-        self.ReserveBalance = 0
+        self.ReserveBalance = 0.0
         #币种代码
         self.CurrencyID = "CNY"
         #上次货币质入金额
-        self.PreFundMortgageIn = 0
+        self.PreFundMortgageIn = 0.0
         #上次货币质出金额
-        self.PreFundMortgageOut = 0
+        self.PreFundMortgageOut = 0.0
         #货币质入金额
-        self.FundMortgageIn = 0
+        self.FundMortgageIn = 0.0
         #货币质出金额
-        self.FundMortgageOut = 0
+        self.FundMortgageOut = 0.0
         #货币质押余额
-        self.FundMortgageAvailable = 0
+        self.FundMortgageAvailable = 0.0
         #可质押货币金额--已废弃
-        self.MortgageableFund = 0
+        self.MortgageableFund = 0.0
         #特殊产品占用保证金--已废弃
-        self.SpecProductMargin = 0
+        self.SpecProductMargin = 0.0
         #特殊产品冻结保证金--已废弃 
-        self.SpecProductFrozenMargin = 0
+        self.SpecProductFrozenMargin = 0.0
         #特殊产品手续费--已废弃
-        self.SpecProductCommission = 0
+        self.SpecProductCommission = 0.0
         #特殊产品冻结手续费--已废弃
-        self.SpecProductFrozenCommission = 0
+        self.SpecProductFrozenCommission = 0.0
         #特殊产品持仓盈亏--已废弃
-        self.SpecProductPositionProfit = 0
+        self.SpecProductPositionProfit = 0.0
         #特殊产品平仓盈亏--已废弃
-        self.SpecProductCloseProfit = 0
+        self.SpecProductCloseProfit = 0.0
         #根据持仓盈亏算法计算的特殊产品持仓盈亏--已废弃
-        self.SpecProductPositionProfitByAlg = 0
+        self.SpecProductPositionProfitByAlg = 0.0
         #特殊产品交易所保证金--已废弃
-        self.SpecProductExchangeMargin = 0
+        self.SpecProductExchangeMargin = 0.0
         #业务类型
         self.BizType = ""
         #延时换汇冻结金额
-        self.FrozenSwap = 0
+        self.FrozenSwap = 0.0
         #剩余换汇额度
-        self.RemainSwap = 0
+        self.RemainSwap = 0.0
         #期权市值
-        self.OptionValue = 0
+        self.OptionValue = 0.0
         #本地时间戳
         self.local_timestamp = 0
         #风险度
-        self.risk_ratio = 0
+        self.risk_ratio = 0.0
         #浮动盈亏,含期权盈亏
-        self.float_profit = 0
+        self.float_profit = 0.0
         #静态权益,含出入金
-        self.static_balance = 0
+        self.static_balance = 0.0
         #市值权益,含期权市值
-        self.market_balance = 0
+        self.market_balance = 0.0
         #市值风险度
-        self.market_risk_ratio = 0
+        self.market_risk_ratio = 0.0
         #期权市值
-        self.option_value = 0
+        self.option_value = 0.0
 
 class Position(FullDictDataClass):
     """持仓数据类"""
@@ -303,7 +303,7 @@ class Position(FullDictDataClass):
         self.InstrumentID = ""
         #交易所代码
         self.ExchangeID = ""
-        #期货"FUTURE",看涨期权"CALL",看跌期权"PUT"
+        #期货"FUTURE",看涨期权"CALL",看跌期权"PUT",组合合约"COMB
         self.ins_class = ""
         #期权行权价
         self.strike_price  = float("nan")
@@ -316,17 +316,17 @@ class Position(FullDictDataClass):
         #多头昨仓冻结
         self.long_frozen_his = 0
         #开仓手续费率(按金额)
-        self.OpenRatioByMoney = 0
+        self.OpenRatioByMoney = 0.0
         #开仓手续费(按手数)
-        self.OpenRatioByVolume = 0
+        self.OpenRatioByVolume = 0.0
         #平仓手续费率(按金额)
-        self.CloseRatioByMoney = 0
+        self.CloseRatioByMoney = 0.0
         #平仓手续费(按手数)
-        self.CloseRatioByVolume = 0
+        self.CloseRatioByVolume = 0.0
         #平今仓手续费率(按金额)
-        self.CloseTodayRatioByMoney = 0
+        self.CloseTodayRatioByMoney = 0.0
          #平今仓手续费(按手数)
-        self.CloseTodayRatioByVolume = 0
+        self.CloseTodayRatioByVolume = 0.0
         #本地时间戳
         self.local_timestamp = 0
 
@@ -371,7 +371,7 @@ class Trade(FullDictDataClass):
         #价格
         self.Price = float("nan")
         #数量
-        self.Volume = float("nan")
+        self.Volume = 0
         #成交时期
         self.TradeDate = ""
         #成交时间
@@ -438,7 +438,7 @@ class Order(FullDictDataClass):
         #价格
         self.LimitPrice = float("nan")
         #数量
-        self.VolumeTotalOriginal = float("nan")
+        self.VolumeTotalOriginal = 0
         #有效期类型
         self.TimeCondition = ""
         #GTD日期
@@ -446,7 +446,7 @@ class Order(FullDictDataClass):
         #成交量类型
         self.VolumeCondition = ""
         #最小成交量
-        self.MinVolume = float("nan")
+        self.MinVolume = 1
         #触发条件
         self.ContingentCondition = ""
         #止损价
@@ -490,9 +490,9 @@ class Order(FullDictDataClass):
         #报单类型
         self.OrderType = ""
         #今成交数量
-        self.VolumeTraded = float("nan")
+        self.VolumeTraded = 0
         #剩余数量
-        self.VolumeTotal = float("nan")
+        self.VolumeTotal = 0
         #报单日期
         self.InsertDate = ""
         #委托时间
@@ -585,7 +585,7 @@ class Quote(FullDictDataClass):
         #昨收盘
         self.PreClosePrice = float("nan")
         #昨持仓量
-        self.PreOpenInterest = float("nan")
+        self.PreOpenInterest = 0
         #今开盘
         self.OpenPrice = float("nan")
         #最高价
@@ -593,11 +593,11 @@ class Quote(FullDictDataClass):
         #最低价
         self.LowestPrice = float("nan")
         #数量
-        self.Volume = float("nan")
+        self.Volume = 0
         #成交金额
         self.Turnover = float("nan")
         #持仓量
-        self.OpenInterest = float("nan")
+        self.OpenInterest = 0
         #今收盘
         self.ClosePrice = float("nan")
         #本次结算价
@@ -613,51 +613,51 @@ class Quote(FullDictDataClass):
         #最后修改时间
         self.UpdateTime = ""
         #最后修改毫秒
-        self.UpdateMillisec = float("nan")
+        self.UpdateMillisec = 0
         #申买价一
         self.BidPrice1 = float("nan")
         #申买量一
-        self.BidVolume1 = float("nan")
+        self.BidVolume1 = 0
         #申卖价一
         self.AskPrice1 = float("nan")
         #申卖量一
-        self.AskVolume1 = float("nan")
+        self.AskVolume1 = 0
         #申买价二
         self.BidPrice2 = float("nan")
         #申买量二
-        self.BidVolume2 = float("nan")
+        self.BidVolume2 = 0
         #申卖价二
         self.AskPrice2 = float("nan")
         #申卖量二
-        self.AskVolume2 = float("nan")
+        self.AskVolume2 = 0
         #申买价三
         self.BidPrice3 = float("nan")
         #申买量三
-        self.BidVolume3 = float("nan")
+        self.BidVolume3 = 0
         #申卖价三
         self.AskPrice3 = float("nan")
         #申卖量三
-        self.AskVolume3 = float("nan")
+        self.AskVolume3 = 0
         #申买价四
         self.BidPrice4 = float("nan")
         #申买量四
-        self.BidVolume4 = float("nan")
+        self.BidVolume4 = 0
         #申卖价四
         self.AskPrice4 = float("nan")
         #申卖量四
-        self.AskVolume4 = float("nan")
+        self.AskVolume4 = 0
         #申买价五
         self.BidPrice5 = float("nan")
         #申买量五
-        self.BidVolume5 = float("nan")
+        self.BidVolume5 = 0
         #申卖价五
         self.AskPrice5 = float("nan")
         #申卖量五
-        self.AskVolume5 = float("nan")
+        self.AskVolume5 = 0
         #当日均价
         self.AveragePrice = float("nan")
         #业务日期
-        self.ActionDay = float("nan")
+        self.ActionDay = ''
         #上带价
         self.BandingUpperPrice = float("nan")
         #下带价
@@ -672,7 +672,7 @@ class Quote(FullDictDataClass):
         self.price_decs = 0
         #交易日
         self.trading_day = 0
-        #期货"FUTURE",看涨期权"CALL",看跌期权"PUT"
+        #期货"FUTURE",看涨期权"CALL",看跌期权"PUT",组合合约"COMB
         self.ins_class = ""
         #是否已被使用标志
         self.used = False  
@@ -731,11 +731,11 @@ class InstrumentProperty(FullDictDataClass):
         #持仓类型
         self.PositionType = ""
         #持仓日期类型
-        self.PositionDateType = float("nan")
+        self.PositionDateType = ""
         #多头保证金率
-        self.LongMarginRatio = 0
+        self.LongMarginRatio = 0.0
         #空头保证金率
-        self.ShortMarginRatio = 0
+        self.ShortMarginRatio = 0.0
         #是否使用大额单边保证金算法
         self.MaxMarginSideAlgorithm = ""
         #保留的无效字段
@@ -762,6 +762,8 @@ class InstrumentProperty(FullDictDataClass):
         self.pre_expire_days = 0
         #交割月前一月最后一日，格式YYYYMM
         self.last_day_pre_expire_month = ""
+        #期货"FUTURE",看涨期权"CALL",看跌期权"PUT",组合合约"COMB
+        self.ins_class = ""
 
 
 
