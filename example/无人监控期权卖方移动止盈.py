@@ -348,10 +348,10 @@ def Main(ZhangHu=[],s="_all",**kw ):
             print("启动账户",datetime.today())
             child_process = multiprocessing.Process(target=Cta,args=(ZhangHu,s,error_queue,),kwargs=kw)
             child_process.start()
-            cta_error = error_queue.get()
-            child_process.join(30)
-            if cta_error: print("策略异常,账户退出",datetime.today())
-            else: print("策略子进程退出",datetime.today())
+            #cta_error = error_queue.get()
+            #child_process.join(30)
+            #if cta_error: print("策略异常,账户退出",datetime.today())
+            #else: print("策略子进程退出",datetime.today())
         #非交易时段退出子进程
         if not trading and child_process is not None:
             if not child_process.is_alive(): #子进程已结束
