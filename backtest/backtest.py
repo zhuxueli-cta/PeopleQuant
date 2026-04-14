@@ -27,7 +27,7 @@ from peoplequant.zhustruct import Quote, Account, Position, Order, Trade
 class BackTest():
     def __init__(self,filepaths:list,start_datetime:datetime,end_datetime:datetime,balance:float=1000000.0,symbol_infos={},
                  col_mapping: Dict[str, str]={"datetime": "datetime","InstrumentID": "symbol", "LastPrice": "close", "AskPrice1": "", "BidPrice1": "", 
-                 "AskVolume1": "", "BidVolume1": "", "Volume": "volume"},datetime_format = "%Y-%m-%d %H:%M:%S%.f",result_file:str='',draw_line=None,
+                 "AskVolume1": "", "BidVolume1": "", "Volume": "volume","OpenInterest":"OpenInterest"},datetime_format = "%Y-%m-%d %H:%M:%S%.f",result_file:str='',draw_line=None,
                  chunk_size=1000):
         '''
         filepaths:品种数据路径列表,可传入tick、K线数据,由此数据生成行情快照
@@ -41,12 +41,13 @@ class BackTest():
                             'm2610': {"ExchangeID": "DCE", 'PriceTick':1, "VolumeMultiple":10, "OpenRatioByMoney":0.1, "OpenRatioByVolume":10,"LimitPriceRatio":0.1},
                             }
         col_mapping:本地数据的字段名称,例如：日期datetime、合约码symbol、最新价close、成交量volume，若本地数据为tick，则可再传入卖一价、买一价、卖一量、买一量的名称，
-                    若本地数据为K线，盘口买卖报价默认为最新价加减1跳，成交量暂无意义。
+                    若本地数据为K线，盘口买卖报价默认为最新价加减1跳，成交量暂无意义。,OpenInterest持仓量
         datetime_format:日期datetime的格式
         result_file:回测结果保存目录
         draw_line:是否启用浏览器实时绘制资金曲线
         '''
         self.filepaths = filepaths
+        self.quote_filepaths = [f if '_quote' in f[:-4] else f"{f[:-4]}_quote.{f[-3:]}" for f in filepaths]
         self.start_datetime = start_datetime
         self.end_datetime = end_datetime
         self.balance = balance
@@ -64,16 +65,20 @@ class BackTest():
             self.result_file = fr'{_flowfile}\logs'
         print('等待回测数据初始化')
         self.data_dfs = []
-        for filepath in filepaths:
+        for filepath, quote_filepath in zip(self.filepaths, self.quote_filepaths):
+            if not os.path.isfile(quote_filepath):
+                #df_quote = read_file_to_tick(filepath,symbol_infos,col_mapping=col_mapping,datetime_format=datetime_format)
+                #df_quote.write_csv(quote_filepath)
+                read_file_to_tick_and_save( filepath=filepath, output_path=quote_filepath, symbol_infos=symbol_infos, col_mapping=col_mapping, datetime_format=datetime_format )
             # 核心：调用轻量首行方法，仅读取文件第一行，不加载全量
-            df = read_file_to_tick_head1(
-                filepath,
+            df = self.read_file_to_tick_head1(
+                (filepath, quote_filepath),
                 symbol_infos,
                 col_mapping=col_mapping,
                 datetime_format=datetime_format
             )
             # 过滤时间范围（仅1行数据，计算极快，无性能损耗）
-            df = df.filter((pl.col("datetime") >= pl.lit(start_datetime)) & (pl.col("datetime") <= pl.lit(end_datetime)))
+            #df = df.filter((pl.col("datetime") >= pl.lit(start_datetime)) & (pl.col("datetime") <= pl.lit(end_datetime)))
             self.data_dfs.append(df)
         #for filepath in filepaths:
         #    df = read_file_to_tick(filepath,symbol_infos,col_mapping=col_mapping,datetime_format=datetime_format)
@@ -82,7 +87,7 @@ class BackTest():
         #self.union_time = get_union_time_index(self.data_dfs)
         #self.quote_dfs = ((Quote().update(q).to_dict() for q in align_to_union_time(df, self.union_time).to_dicts()) for df in self.data_dfs)
         self.union_time = self._get_lightweight_union_time()
-        self.data_lazy_gens = self._create_lazy_data_generators()
+        self.data_lazy_gens = self.create_lazy_data_generators()
         self.quote_dfs = (self._stream_quote_generator(lazy_gen) for lazy_gen in self.data_lazy_gens)
         
         self.draw_line = draw_line
@@ -216,6 +221,9 @@ class BackTest():
         """回测数据推送统一方法，添加频率限制"""
         if not self.draw_line:  # 关闭绘图直接返回
             return
+        if current_datetime is None:  # 无时间数据，不绘图
+            self.data_queue.put(None)
+            return
         # 频率限制：未到间隔时间，直接跳过推送
         now = datetime.now()
         if (now - self.last_push_time).total_seconds() < self.push_interval:
@@ -244,7 +252,7 @@ class BackTest():
     def _get_lightweight_union_time(self) -> pl.DataFrame:
         """轻量生成联合时间轴：仅读取所有文件的datetime列，不加载任何行情数据"""
         time_dfs = []
-        for filepath in self.filepaths:
+        for filepath in self.quote_filepaths:
             # 利用原有read_only_datetime，仅加载datetime列，超轻量
             df_time = read_only_datetime(
                 filepath=filepath,
@@ -263,6 +271,24 @@ class BackTest():
         del time_dfs
         return union_time
     
+    def create_lazy_data_generators(self) -> Generator[pl.LazyFrame, None, None]:
+        """创建单品种的懒加载查询计划生成器，按需执行，不占内存"""
+        for filepath in self.quote_filepaths:
+            # 1. 懒加载CSV：pl.scan_csv替代pl.read_csv，仅生成查询计划，不加载数据
+            lazy_df = pl.scan_csv(filepath,schema_overrides={"TradingDay":pl.String,"ActionDay":pl.String})
+            if lazy_df.collect_schema()["datetime"] != pl.Datetime:
+                lazy_df = lazy_df.with_columns(
+                    pl.col("datetime").str.strptime(pl.Datetime, self.datetime_format).alias("datetime")
+                )
+            
+            # 3. 过滤回测时间范围（懒加载过滤，仅执行时生效）
+            lazy_df = lazy_df.filter(
+                (pl.col("datetime") >= pl.lit(self.start_datetime)) & 
+                (pl.col("datetime") <= pl.lit(self.end_datetime))
+            )
+            # 生成器：迭代时才执行上述所有懒加载逻辑
+            yield lazy_df
+
     def _create_lazy_data_generators(self) -> Generator[pl.LazyFrame, None, None]:
         """创建单品种的懒加载查询计划生成器，按需执行，不占内存"""
         for filepath in self.filepaths:
@@ -343,14 +369,102 @@ class BackTest():
         # 2. 逐行迭代流式DataFrame，生成Quote对象
         for row in stream_df.to_dicts():
             # 生成Quote字典（与原有逻辑一致）
-            quote_dict = Quote().update(row).to_dict()
+            quote_dict = row # Quote().update(row).to_dict()
             yield quote_dict
         # 3. 迭代结束后，强制释放当前块的内存
         del stream_df
         
         gc.collect()  # 手动触发垃圾回收，确保内存释放
+    def read_file_to_tick_head1(self,
+        filepath,
+        symbol_infos:dict,
+        col_mapping: Dict[str, str]={"datetime": "datetime","InstrumentID": "symbol", "LastPrice": "close", "AskPrice1": "", "BidPrice1": "", 
+                                    "AskVolume1": "", "BidVolume1": "", "Volume": "volume","OpenInterest":"OpenInterest"}, 
+        datetime_format = "%Y-%m-%d %H:%M:%S%.f"
+    ) -> pl.DataFrame:
+        """
+        轻量读取文件**仅第一行**并转换为tick格式，不加载全量数据，彻底降低内存占用
+        完全复用read_file_to_tick的业务逻辑，仅数据加载层改为head(1)
+        """
+        # 核心：懒加载+仅读取首行，不加载全量数据（Polars底层仅读取文件首行，无全量IO）
+        if os.path.isfile(filepath[1]):
+            lazy_df = pl.scan_csv(filepath[1],schema_overrides={"TradingDay":pl.String,"ActionDay":pl.String})  # 生成懒加载查询计划，不实际读取
+            if lazy_df.collect_schema()["datetime"] != pl.Datetime:
+                lazy_df = lazy_df.with_columns(
+                    pl.col("datetime").str.strptime(pl.Datetime, datetime_format).alias("datetime")
+                )
+                lazy_df = lazy_df.filter(
+                (pl.col("datetime") >= pl.lit(self.start_datetime)) &
+                (pl.col("datetime") <= pl.lit(self.end_datetime)) &
+                (pl.col("InstrumentID") != '')
+            )
+            
+            df = lazy_df.head(1).collect()
+            return df
+        else:
+            lazy_df = pl.scan_csv(filepath[0])  # 生成懒加载查询计划，不实际读取
+            #df = lazy_df.head(1).collect()   # 仅执行首行读取，内存占用≈单行数据大小
+            rename_map = {v: k for k, v in col_mapping.items() if v}
+            lazy_df = lazy_df.rename(rename_map)
+            if "datetime" in lazy_df.collect_schema().names():
+                lazy_df = lazy_df.with_columns(
+                    pl.col("datetime").str.strptime(pl.Datetime, datetime_format).alias("datetime")
+                )
+            lazy_df = lazy_df.filter(
+                (pl.col("datetime") >= pl.lit(self.start_datetime)) &
+                (pl.col("datetime") <= pl.lit(self.end_datetime)) &
+                (pl.col("InstrumentID") != '')
+            )
+            
+            df = lazy_df.head(1).collect()
+            if df.is_empty():
+                return df
+            # 以下逻辑与原read_file_to_tick完全一致，无任何修改
+            #df = df.rename({v:k for k,v in col_mapping.items() if v})
+            # 处理空文件/首行无数据的情况
+            #if df.is_empty():
+            #    return pl.DataFrame(schema=df.schema)
+            symbol = df["InstrumentID"][0]
+            symbol_info = symbol_infos.get(symbol,{'PriceTick':1, 'LimitPriceRatio':0.1})
+            columns = df.columns
+            if "AskPrice1" not in columns or "BidPrice1" not in columns:
+                df = df.with_columns(
+                    (pl.col("LastPrice") + symbol_info['PriceTick']).alias("AskPrice1"),
+                    (pl.col("LastPrice") - symbol_info['PriceTick']).alias("BidPrice1"), 
+                    (pl.col("LastPrice")*(1 + symbol_info['LimitPriceRatio'])).alias("UpperLimitPrice"),
+                    (pl.col("LastPrice")*(1 - symbol_info['LimitPriceRatio'])).alias("LowerLimitPrice"),
+                    pl.lit(0).alias("BandingUpperPrice"),
+                    pl.lit(0).alias("BandingLowerPrice"),
+                    pl.lit(0).alias("AskVolume1"),
+                    pl.lit(0).alias("BidVolume1")
+                )
+            #if  not isinstance(df["datetime"].dtype, pl.Datetime):
+            #    df = df.with_columns(
+            #        pl.col("datetime").str.strptime(pl.Datetime, datetime_format).alias("datetime")
+            #    )
+            df = df.with_columns(
+                        pl.col("datetime").dt.strftime("%Y%m%d").alias("ActionDay"),
+                        pl.when(pl.col("datetime").dt.hour() >= 19)
+                        .then(
+                            pl.when(pl.col("datetime").dt.weekday() == 5)
+                            .then(pl.col("datetime").dt.offset_by("3d"))
+                            .otherwise(pl.col("datetime").dt.offset_by("1d"))
+                        )
+                        .when(pl.col("datetime").dt.hour() < 8)
+                        .then(
+                            pl.when(pl.col("datetime").dt.weekday() == 6)
+                            .then(pl.col("datetime").dt.offset_by("2d"))
+                            .otherwise(pl.col("datetime"))
+                        )
+                        .otherwise(pl.col("datetime"))
+                        .dt.strftime("%Y%m%d").alias("TradingDay"),
+                        pl.col("datetime").dt.strftime("%H:%M:%S").alias("UpdateTime"),
+                        pl.col("datetime").dt.millisecond().alias("UpdateMillisec"),
+                    )
+            return df.select(list(col_mapping.keys())+["ActionDay","TradingDay","UpdateTime","UpdateMillisec","UpperLimitPrice","LowerLimitPrice","BandingUpperPrice","BandingLowerPrice"])
 
-def read_kline_file(filepath,col_mapping: Dict[str, str]={"datetime": "datetime","InstrumentID": "symbol", "open": "open", "high": "high", "low": "low", "close": "close", "Volume": "volume"}, 
+def read_kline_file(filepath,col_mapping: Dict[str, str]={"datetime": "datetime","InstrumentID": "symbol", "open": "open", "high": "high", "low": "low", 
+                                                          "close": "close", "Volume": "volume","OpenInterest":"OpenInterest"}, 
                     datetime_format = "%Y-%m-%d %H:%M:%S%.f") -> pl.DataFrame:
     data = pl.read_csv(filepath,
                     #try_parse_dates = True
@@ -376,7 +490,7 @@ def read_kline_file(filepath,col_mapping: Dict[str, str]={"datetime": "datetime"
     ])
 
 def read_file_to_tick(filepath,symbol_infos:dict,col_mapping: Dict[str, str]={"datetime": "datetime","InstrumentID": "symbol", "LastPrice": "close", "AskPrice1": "", "BidPrice1": "", 
-                                                                        "AskVolume1": "", "BidVolume1": "", "Volume": "volume"}, 
+                                                                        "AskVolume1": "", "BidVolume1": "", "Volume": "volume","OpenInterest":"OpenInterest"}, 
                     datetime_format = "%Y-%m-%d %H:%M:%S%.f") -> pl.DataFrame:
     data = pl.read_csv(filepath,
                     #try_parse_dates = True
@@ -402,7 +516,7 @@ def read_file_to_tick(filepath,symbol_infos:dict,col_mapping: Dict[str, str]={"d
         data = data.with_columns(
             pl.col("datetime").str.strptime(pl.Datetime, datetime_format).alias("datetime")
         )
-    data = data.with_columns(
+    data = data.sort("datetime").with_columns(
                 pl.col("datetime").dt.strftime("%Y%m%d").alias("ActionDay"),
                 # 🔥 重构TradingDay计算逻辑：分19点后、8点前、其余时间三层判断
                 pl.when(pl.col("datetime").dt.hour() >= 19)
@@ -436,66 +550,103 @@ def read_file_to_tick(filepath,symbol_infos:dict,col_mapping: Dict[str, str]={"d
     #            )
     return data.select(list(col_mapping.keys())+["ActionDay","TradingDay","UpdateTime","UpdateMillisec","UpperLimitPrice","LowerLimitPrice","BandingUpperPrice","BandingLowerPrice"])
 
-def read_file_to_tick_head1(
+def read_file_to_tick_and_save(
     filepath,
-    symbol_infos:dict,
-    col_mapping: Dict[str, str]={"datetime": "datetime","InstrumentID": "symbol", "LastPrice": "close", "AskPrice1": "", "BidPrice1": "", 
-                                "AskVolume1": "", "BidVolume1": "", "Volume": "volume"}, 
-    datetime_format = "%Y-%m-%d %H:%M:%S%.f"
-) -> pl.DataFrame:
+    output_path,
+    symbol_infos: dict,
+    col_mapping: Dict[str, str],
+    datetime_format="%Y-%m-%d %H:%M:%S%.f",
+    chunk_size=100000  # 分块大小，可改
+):
     """
-    轻量读取文件**仅第一行**并转换为tick格式，不加载全量数据，彻底降低内存占用
-    完全复用read_file_to_tick的业务逻辑，仅数据加载层改为head(1)
+    手动分块读取大文件 → 处理 → 追加写入，彻底解决schema不匹配问题
+    内存只占用1个chunk，不会爆
     """
-    # 核心：懒加载+仅读取首行，不加载全量数据（Polars底层仅读取文件首行，无全量IO）
-    lazy_df = pl.scan_csv(filepath)  # 生成懒加载查询计划，不实际读取
-    df = lazy_df.head(1).collect()   # 仅执行首行读取，内存占用≈单行数据大小
-    
-    # 以下逻辑与原read_file_to_tick完全一致，无任何修改
-    df = df.rename({v:k for k,v in col_mapping.items() if v})
-    # 处理空文件/首行无数据的情况
-    if df.is_empty():
-        return pl.DataFrame(schema=df.schema)
-    symbol = df["InstrumentID"][0]
-    symbol_info = symbol_infos.get(symbol,{'PriceTick':1, 'LimitPriceRatio':0.1})
-    columns = df.columns
-    if "AskPrice1" not in columns or "BidPrice1" not in columns:
-        df = df.with_columns(
-            (pl.col("LastPrice") + symbol_info['PriceTick']).alias("AskPrice1"),
-            (pl.col("LastPrice") - symbol_info['PriceTick']).alias("BidPrice1"), 
-            (pl.col("LastPrice")*(1 + symbol_info['LimitPriceRatio'])).alias("UpperLimitPrice"),
-            (pl.col("LastPrice")*(1 - symbol_info['LimitPriceRatio'])).alias("LowerLimitPrice"),
-            pl.lit(0).alias("BandingUpperPrice"),
-            pl.lit(0).alias("BandingLowerPrice"),
-            pl.lit(0).alias("AskVolume1"),
-            pl.lit(0).alias("BidVolume1")
-        )
-    if  not isinstance(df["datetime"].dtype, pl.Datetime):
-        df = df.with_columns(
-            pl.col("datetime").str.strptime(pl.Datetime, datetime_format).alias("datetime")
-        )
-    df = df.with_columns(
-                pl.col("datetime").dt.strftime("%Y%m%d").alias("ActionDay"),
-                pl.when(pl.col("datetime").dt.hour() >= 19)
-                .then(
-                    pl.when(pl.col("datetime").dt.weekday() == 5)
-                    .then(pl.col("datetime").dt.offset_by("3d"))
-                    .otherwise(pl.col("datetime").dt.offset_by("1d"))
-                )
-                .when(pl.col("datetime").dt.hour() < 8)
-                .then(
-                    pl.when(pl.col("datetime").dt.weekday() == 6)
-                    .then(pl.col("datetime").dt.offset_by("2d"))
-                    .otherwise(pl.col("datetime"))
-                )
-                .otherwise(pl.col("datetime"))
-                .dt.strftime("%Y%m%d").alias("TradingDay"),
-                pl.col("datetime").dt.strftime("%H:%M:%S").alias("UpdateTime"),
-                pl.col("datetime").dt.millisecond().alias("UpdateMillisec"),
-            )
-    return df.select(list(col_mapping.keys())+["ActionDay","TradingDay","UpdateTime","UpdateMillisec","UpperLimitPrice","LowerLimitPrice","BandingUpperPrice","BandingLowerPrice"])
+    # 1. 先读取首行，获取symbol信息
+    df_head = pl.read_csv(filepath, n_rows=1)
+    rename_map = {v: k for k, v in col_mapping.items() if v}
+    df_head = df_head.rename(rename_map)
+    symbol = df_head["InstrumentID"][0]
+    symbol_info = symbol_infos.get(symbol, {'PriceTick': 1, 'LimitPriceRatio': 0.1})
+    del df_head
 
-def standardize_tick_df(df:pl.DataFrame,symbol_info,col_mapping: Dict[str, str]={"datetime": "datetime","InstrumentID": "symbol", "LastPrice": "close", "AskPrice1": "", "BidPrice1": "", "AskVolume1": "", "BidVolume1": "", "Volume": "volume"}, 
+    # 2. 分块读取器（手动分块，最稳）
+    reader = pl.read_csv_batched(
+        filepath,
+        batch_size=chunk_size
+    )
+
+    # 3. 逐块处理 + 逐块写入（第一次写header，之后append）
+    first_write = True
+    while True:
+        try:
+            chunk = reader.next_batches(1)
+            if chunk is None or len(chunk) == 0:
+                break
+            df = chunk[0]
+
+            # ----------------------
+            # 你的原有处理逻辑（完全不变）
+            # ----------------------
+            df = df.rename({v: k for k, v in col_mapping.items() if v})
+
+            if "AskPrice1" not in df.columns or "BidPrice1" not in df.columns:
+                df = df.with_columns(
+                    (pl.col("LastPrice") + symbol_info['PriceTick']).alias("AskPrice1"),
+                    (pl.col("LastPrice") - symbol_info['PriceTick']).alias("BidPrice1"),
+                    (pl.col("LastPrice")*(1+symbol_info['LimitPriceRatio'])).alias("UpperLimitPrice"),
+                    (pl.col("LastPrice")*(1-symbol_info['LimitPriceRatio'])).alias("LowerLimitPrice"),
+                    pl.lit(0).alias("BandingUpperPrice"),
+                    pl.lit(0).alias("BandingLowerPrice"),
+                    pl.lit(0).alias("AskVolume1"),
+                    pl.lit(0).alias("BidVolume1")
+                )
+
+            if not isinstance(df["datetime"].dtype, pl.Datetime):
+                df = df.with_columns(
+                    pl.col("datetime").str.strptime(pl.Datetime, datetime_format).alias("datetime")
+                )
+
+            df = df.sort("datetime").with_columns(
+                pl.col("datetime").dt.strftime("%Y%m%d").alias("ActionDay"),
+                pl.when(pl.col("datetime").dt.hour()>=19).then(
+                    pl.when(pl.col("datetime").dt.weekday()==5).then(pl.col("datetime").dt.offset_by("3d"))
+                    .otherwise(pl.col("datetime").dt.offset_by("1d"))
+                ).when(pl.col("datetime").dt.hour()<8).then(
+                    pl.when(pl.col("datetime").dt.weekday()==6).then(pl.col("datetime").dt.offset_by("2d"))
+                    .otherwise(pl.col("datetime"))
+                ).otherwise(pl.col("datetime")).dt.strftime("%Y%m%d").alias("TradingDay"),
+                pl.col("datetime").dt.strftime("%H:%M:%S").alias("UpdateTime"),
+                pl.col("datetime").dt.millisecond().alias("UpdateMillisec")
+            )
+
+            select_cols = list(col_mapping.keys()) + [
+                "ActionDay","TradingDay","UpdateTime","UpdateMillisec",
+                "UpperLimitPrice","LowerLimitPrice","BandingUpperPrice","BandingLowerPrice"
+            ]
+            df = df.select(select_cols)
+
+            # 写入文件（第一行带header，之后append）
+            if first_write:
+                df.write_csv(output_path, include_header=True,datetime_format=datetime_format)
+                first_write = False
+            else:
+                # 追加：用with open(mode='a')，无header
+                with open(output_path, mode='a', newline='', encoding='utf-8') as f:
+                    df.write_csv(f, include_header=False,datetime_format=datetime_format)
+
+            # 释放块内存
+            del df
+
+        except StopIteration:
+            break
+
+    # 强制回收
+    import gc
+    gc.collect()
+
+def standardize_tick_df(df:pl.DataFrame,symbol_info,col_mapping: Dict[str, str]={"datetime": "datetime","InstrumentID": "symbol", "LastPrice": "close", "AskPrice1": "", "BidPrice1": "", "AskVolume1": "", 
+                                                                                 "BidVolume1": "", "Volume": "volume","OpenInterest":"OpenInterest"}, 
                     datetime_format = "%Y-%m-%d %H:%M:%S%.f") -> pl.DataFrame:
     # 重命名列
     df = df.rename({v:k for k,v in col_mapping.items() if v})
@@ -515,7 +666,7 @@ def standardize_tick_df(df:pl.DataFrame,symbol_info,col_mapping: Dict[str, str]=
         df = df.with_columns(
             pl.col("datetime").str.strptime(pl.Datetime, datetime_format).alias("datetime")
         )
-    df = df.with_columns(
+    df = df.sort("datetime").with_columns(
             pl.col("datetime").dt.strftime("%Y%m%d").alias("ActionDay"),
             # 计算 TradingDay：16:00 前用当天，16:00 后用次日
             pl.when(pl.col("datetime").dt.hour() >= 16)
@@ -537,7 +688,8 @@ def standardize_tick_df(df:pl.DataFrame,symbol_info,col_mapping: Dict[str, str]=
 
 def standardize_kline_df(
     df: pl.DataFrame,
-    col_mapping: Dict[str, str]={"datetime": "datetime","InstrumentID": "symbol", "open": "open", "high": "high", "low": "low", "close": "close", "Volume": "volume"},
+    col_mapping: Dict[str, str]={"datetime": "datetime","InstrumentID": "symbol", "open": "open", "high": "high", "low": "low", 
+                                 "close": "close", "Volume": "volume","OpenInterest":"OpenInterest"},
     datetime_col: str = "datetime",
     symbol_col: Optional[str] = None,
     datetime_format = "%Y-%m-%d %H:%M:%S%.f"
@@ -817,11 +969,16 @@ def read_only_datetime(
     :return: 仅含datetime列的Polars DataFrame（已转Datetime类型）
     """
     # 仅读取映射后的datetime列，跳过所有其他列
-    datetime_ori_col = [k for k, v in col_mapping.items() if v == "datetime"][0]
+    datetime_ori_col = [v for k, v in col_mapping.items() if k == "datetime"][0]
     # 只加载datetime列，大幅减少内存
-    lazy_df = pl.scan_csv(filepath).select([datetime_ori_col])
-    # 重命名+转类型
-    df = lazy_df.rename({datetime_ori_col: "datetime"}).collect()
+    lazy_df = pl.scan_csv(filepath)
+    if "datetime" in lazy_df.collect_schema().names():
+        lazy_df = lazy_df.select(["datetime"])
+    else:
+        # 重命名
+        lazy_df = lazy_df.select([datetime_ori_col]).rename({datetime_ori_col: "datetime"})
+        #转类型
+    df = lazy_df.collect()
     if not isinstance(df["datetime"].dtype, pl.Datetime):
         df = df.with_columns(
             pl.col("datetime").str.strptime(pl.Datetime, datetime_format).alias("datetime")

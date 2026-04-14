@@ -34,6 +34,8 @@ class RealTimeBalanceBuffer():
         self.max_raw_points = max_raw_points
         self.sample_interval = sample_interval
         self.max_total_points = max_total_points
+        self.interval = 1000  # 默认刷新间隔（毫秒）
+        self.backtest = ''
         self.buffer = pl.DataFrame({
                     "ctp_datetime": pl.Series([], dtype=pl.Datetime),
                     "Balance": pl.Series([], dtype=pl.Float64),
@@ -176,7 +178,6 @@ def plot_realtime_metrics(
             full_html=True
         )
         print(f"✅ 初始HTML文件同步生成：{REALTIME_HTML_PATH}")
-        
         # 同步添加刷新标签（文件已存在，无风险）
         refresh_tag = f'<meta http-equiv="refresh" content="{interval/1000}">'
         with open(REALTIME_HTML_PATH, "r+", encoding="utf-8") as f:
@@ -208,9 +209,20 @@ def plot_realtime_metrics(
         last_write_time = time.time()  # 新增：上一次写HTML的时间
         write_interval = 1.0  # 新增：HTML重写间隔（1秒/次）
         while True:
+            if buffer.backtest is None:  # 回测结束标志，退出循环
+                refresh_tag = f'<meta http-equiv="refresh" content="{interval/1000}">'
+                with open(REALTIME_HTML_PATH, "r+", encoding="utf-8") as f:
+                    html_content = f.read().replace('<meta http-equiv="refresh" content="1.0">', f"")
+                    f.seek(0)
+                    f.write(html_content)
+                    f.truncate()
+                return
             df = buffer.get_data()
+            # 🔥 非关键步骤异步兜底：检查并添加刷新标签（不影响主流程）
+            refresh_tag = f'<meta http-equiv="refresh" content="{buffer.interval/1000}">'
             if len(df) < 2:
                 time.sleep(0.1)
+                
                 continue
             now = time.time()
             if now - last_write_time < write_interval:
@@ -295,8 +307,6 @@ def plot_realtime_metrics(
                 print(f"❌ 同步更新HTML失败：{str(e)}", flush=True)
                 continue
 
-            # 🔥 非关键步骤异步兜底：检查并添加刷新标签（不影响主流程）
-            refresh_tag = f'<meta http-equiv="refresh" content="{interval/1000}">'
             def check_refresh_tag():
                 try:
                     with open(REALTIME_HTML_PATH, "r+", encoding="utf-8") as f:
@@ -313,6 +323,7 @@ def plot_realtime_metrics(
             # 启动异步线程执行非关键检查（不阻塞主流程）
             threading.Thread(target=check_refresh_tag, daemon=True).start()
             time.sleep(interval / 1000)
+            
 
     update_thread = threading.Thread(target=update_plot, daemon=True)
     update_thread.start()
@@ -328,7 +339,12 @@ def start_realtime_animation(buffer: RealTimeBalanceBuffer,data_queue:multiproce
                 # 批量消费：一次性取队列中所有数据 
                 batch_data = []
                 while not data_queue.empty()  :
-                    batch_data.append(data_queue.get(block=False))
+                    d = data_queue.get(block=False)
+                    if d is None:  # 约定：None表示无数据，跳过
+                        buffer.interval = 3600*1000
+                        buffer.backtest = None
+                        return
+                    batch_data.append(d)
                 if not batch_data:  # 无数据则休眠，减少CPU空转
                     time.sleep(0.1)
                     continue
@@ -540,7 +556,7 @@ def draw_main(data_queue:multiprocessing.Queue):
 # -------------------------- 主程序测试（可选） --------------------------
 if __name__ == "__main__":
     try:
-        sample_data = pl.read_csv(fr'C:\datas\backtest_result3.csv', try_parse_dates=True)
+        sample_data = pl.read_csv(fr'C:\datas\backtest_result.csv', try_parse_dates=True)
         plot_metrics_separately(
             sample_data,
             max_display_points=1000,
