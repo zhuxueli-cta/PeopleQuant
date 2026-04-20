@@ -61,11 +61,11 @@ class PeopleQuantApi():
         if self.quote_queue is not None:
             self.MarketDataqueue.append(quote_queue)
         self.instruments = set()  #全部合约代码
-        self.quote = {}  #全部合约行情
-        self.instruments_property = {} #合约属性
-        self.positions = {}  #全部合约持仓
-        self.orders = {}  #全部委托单
-        self.trades = {}  #全部成交单
+        self.quote:Dict[str, Quote] = {}  #全部合约行情
+        self.instruments_property:Dict[str, InstrumentProperty] = {} #合约属性
+        self.positions:Dict[str, Position] = {}  #全部合约持仓
+        self.orders:Dict[str, Order] = {}  #全部委托单
+        self.trades:Dict[str, Trade] = {}  #全部成交单
         self.account= Account()  #账户资金
         self.subscribe_instruments = set() #已订阅合约代码
         self.unsubscribe_instruments = set() #已退订合约代码
@@ -285,22 +285,24 @@ class PeopleQuantApi():
             return []
         return [Trade().update(t).update({"local_timestamp":tm.time()}) for t in r['ret']]
 
-    def get_symbol_order(self,InstrumentID:str = "", OrderStatus:str = "",CombOffsetFlag:str="",OrderMemo:str="",wait_return=False,_print=True,_logs=False) -> List[Order]:
+    def get_symbol_order(self,InstrumentID:str = "", OrderStatus:str = "",CombOffsetFlag:str="",Direction:str="",OrderMemo:str="",wait_return=False,_print=True,_logs=False) -> List[Order]:
         '''
         获取合约委托单
         Ags:
             InstrumentID: 合约代码,如rb2601,不填则查询全部委托单
             OrderStatus: 委托单状态,"Alive"查询活动委托单,"Finished"查询已完结委托单
             CombOffsetFlag: Open开仓单,Close平仓单
+            Direction: 买卖方向,Buy买,Sell卖
+            OrderMemo: 委托单标记
         Return:
             由委托单Order对象组成的列表
         '''
         if InstrumentID and not self.check_instrument(InstrumentID): return
-        if not InstrumentID and not OrderStatus and not CombOffsetFlag and not OrderMemo : return self.orders
-        r = self._sendReq({"reqfuncname":"get_symbol_order","InstrumentID":InstrumentID,"OrderStatus":OrderStatus,"CombOffsetFlag":CombOffsetFlag,"OrderMemo":OrderMemo,"wait_return":wait_return })
+        if not InstrumentID and not OrderStatus and not CombOffsetFlag and not OrderMemo and not Direction: return self.orders
+        r = self._sendReq({"reqfuncname":"get_symbol_order","InstrumentID":InstrumentID,"OrderStatus":OrderStatus,"CombOffsetFlag":CombOffsetFlag,"Direction":Direction,"OrderMemo":OrderMemo,"wait_return":wait_return })
         if not r['ret']: 
             if _logs:
-                e = f"{datetime.now()} -get_symbol_order查询委托单为空InstrumentID:{InstrumentID},OrderStatus:{OrderStatus},CombOffsetFlag:{CombOffsetFlag}\n"
+                e = f"{datetime.now()} -get_symbol_order查询委托单为空InstrumentID:{InstrumentID},OrderStatus:{OrderStatus},CombOffsetFlag:{CombOffsetFlag},Direction:{Direction}\n"
                 with self.data_lock: self.logs_txt(e,self._logfile,_print=_print)
             return []
         return [Order().update(o).update({"local_timestamp":tm.time()}) for o in r['ret']]
@@ -312,7 +314,7 @@ class PeopleQuantApi():
             InstrumentID: 合约代码,如rb2601
             order_id: 为委托单order编号组成的字符串:f'{order["FrontID"]}_{order["SessionID"]}_{order["OrderRef"]}'
         Return:
-            order_id有效时返回委托单对象,order_id不设置时返回委托单对象组成的列表
+            order_id有效时返回委托单对象,order_id不设置时返回委托单对象组成的列表。未从ctp收到回报时(order_id尚不存在)返回的是静态Order对象,重新调用get_id_order可获取最新动态委托单
         '''
         if InstrumentID and not self.check_instrument(InstrumentID): return
         if order_id in self.orders:
@@ -336,16 +338,17 @@ class PeopleQuantApi():
                             return
                     return [Order().update(o).update({"local_timestamp":tm.time()}) for o in r['ret']]
                        
-    def get_trade_of_order(self, order_id:Union[str,Order],wait_return=False,_print=True) -> List[Trade]:
+    def get_trade_of_order(self, order_id:Union[str,Order]='',wait_return=False,_print=True) -> List[Trade]:
         '''
         获取合约委托单对应的成交单
         Ags:
-            order_id: 必填,委托单order_id或委托单对象Order
+            order_id: 委托单order_id或委托单对象Order,若为空字符串则返回账户全部成交单
         Return:
             由成交单字典组成的列表
         '''
         if isinstance(order_id,Order):
             order_id = order_id.order_id
+        elif not order_id: return self.trades
         r = self._sendReq({"reqfuncname":"get_trade_of_order","order_id":order_id,"wait_return":wait_return, })
         if not r['ret']: 
             if _print:
@@ -678,7 +681,7 @@ class PeopleQuantApi():
                 self.cancel_order(o["order_id"],OrderMemo=OrderMemo)
         
     def insert_order(self,ExchangeID:str,InstrumentID:str,Direction:str,Offset:str,Volume:int,LimitPrice:float,advanced=None,HedgeFlag:str="1",WaitReturn=False,
-                     OrderMemo="pqapi",_print=True,ctp_error=False,_signal_quote:Union[None,Quote]=None) -> Union[None,Order]:
+                     OrderMemo="pqapi",avoid_self_trade=True,_print=True,ctp_error=False,_signal_quote:Union[None,Quote]=None) -> Union[None,Order]:
         '''非阻塞函数,报单被交易所接受后返回字典'''
         if not self.check_instrument(InstrumentID): return
         quote = self.get_quote(InstrumentID)
@@ -710,7 +713,7 @@ class PeopleQuantApi():
         if LimitPrice > quote["BidPrice1"] and Direction == "Sell":advanced = None
         if '&' in InstrumentID: advanced = None
         r = self._sendReq({"reqfuncname":"insert_order","ExchangeID":ExchangeID,"InstrumentID":InstrumentID,"Direction":Direction,"Offset":Offset,"Volume":Volume,"LimitPrice":LimitPrice,
-                            "advanced":advanced,"HedgeFlag":HedgeFlag,"WaitReturn":WaitReturn,"OrderMemo":OrderMemo,"ctp_error":ctp_error,"_signal_quote":_signal_quote, })
+                            "advanced":advanced,"HedgeFlag":HedgeFlag,"WaitReturn":WaitReturn,"OrderMemo":OrderMemo,"avoid_self_trade":avoid_self_trade,"ctp_error":ctp_error,"_signal_quote":_signal_quote, })
         if not isinstance(r['ret'],dict) :
             e = f"{datetime.now()} -insert_order报单失败,客户端拒绝或报单错误,错误信息:{r['ret']}\n"
             with self.data_lock: self.logs_txt(e,self._logfile,_print=_print)
@@ -719,7 +722,7 @@ class PeopleQuantApi():
             return Order( ).update(list(r['ret'].values())[0]).update({"local_timestamp":tm.time()})
 
     def open_close(self,symbol:str,kaiping:str='',lot:int=0,price=None,block=True,n_price_tick=1,che_time=0,order_info='无',signal_price=float('nan'),close_today=True,
-                   order_close_chan=True,advanced=None,open_min_volume=1,combin_cancel=False,HedgeFlag:str="1",WaitReturn=False,OrderMemo:str="pqapi",ctp_error=False,_print=True,**kw):
+                   order_close_chan=True,advanced=None,open_min_volume=1,combin_cancel=False,OrderMemo:str="pqapi",avoid_self_trade=True,HedgeFlag:str="1",WaitReturn=False,ctp_error=False,_print=True,**kw):
         '''
         报单,只支持限价下单,市价单以停板价报单,实际效果等效于市价单(部分交易所不支持市价单)
         Args:
@@ -739,6 +742,7 @@ class PeopleQuantApi():
             open_min_volume:开仓最小手数,有些合约有最小开仓数量限制
             combin_cancel: n_price_tick和che_time是否适用于组合合约撤单
             OrderMemo:str,委托单标记,不超过12个字符,例如标记为'pqapi',则可通过该标记查询委托单,用于区分是本客户端的委托单还是其他客户端的委托单
+            avoid_self_trade:防范自成交,默认开启
         Return:
             {shoushu:0, "junjia":float("nan"), "che_count":0, "day_order":0, "symbol":symbol, "kaiping":kaiping,"lot":lot,"price":price, "last_msg":last_msg ,
             "quote_volume":float('nan'),"order_id":[],"trades":[],"order_wrong":True,"signal_price":signal_price,"order_info":order_info,"profit_count":0,"profit_money}
@@ -781,7 +785,7 @@ class PeopleQuantApi():
         if trading_night_time : #只监控夜盘,白盘跨15点会结算
             if ctp_time >= night_time > time(20) or time(8) > ctp_time >= night_time :
                 e = f"{datetime.now()} -open_close临近收盘停止交易,收盘时间:{night_time}\n"
-                with self.data_lock: self.logs_txt(e,self._logfile,_print=False)
+                with self.data_lock: self.logs_txt(e,self._logfile,_print=_print)
                 return {"shoushu":0, "junjia":float("nan"), "che_count":0, "day_order":0, "symbol":symbol, "kaiping":kaiping,"lot":lot,"price":price,
                     "last_msg":f"临近收盘停止交易" if equal_time else "时间不同步,行情未更新","quote_volume":quote_volume,
                     "order_id":[],"trades":[],"order_wrong":True if equal_time else False,"signal_price":signal_price,"order_info":order_info,
@@ -793,6 +797,8 @@ class PeopleQuantApi():
             elif quote["LowerLimitPrice"] <= quote["BidPrice1"] <= quote["UpperLimitPrice"]: price_buy = quote["BidPrice1"] #停板 
             elif quote["AskPrice1"] == quote["LowerLimitPrice"]: price_buy = quote["AskPrice1"] #停板 
             elif buy:
+                e = f"{datetime.now()} -open_close下单失败,合约:{symbol},交易方向:{kaiping},买盘无报价,不能使用超价\n"
+                with self.data_lock: self.logs_txt(e,self._logfile,_print=_print)
                 return {"shoushu":0, "junjia":float("nan"), "che_count":0, "day_order":0, "symbol":symbol, "kaiping":kaiping,"lot":lot,"price":price, "last_msg":f"买盘无报价,不能使用超价" ,
                     "quote_volume":float('nan'),"order_id":[],"trades":[],"order_wrong":False,"signal_price":signal_price,"order_info":order_info,"profit_count":0,"profit_money":0,"quote":quote,"position":position}
             if quote["UpperLimitPrice"] >= quote["AskPrice1"]-PriceTick >= quote["LowerLimitPrice"]:
@@ -800,6 +806,8 @@ class PeopleQuantApi():
             elif quote["LowerLimitPrice"] <= quote["AskPrice1"] <= quote["UpperLimitPrice"]: price_sell = quote["AskPrice1"]
             elif quote["BidPrice1"] == quote["UpperLimitPrice"]: price_sell = quote["BidPrice1"]
             elif sell:
+                e = f"{datetime.now()} -open_close下单失败,合约:{symbol},交易方向:{kaiping},卖盘无报价,不能使用超价\n"
+                with self.data_lock: self.logs_txt(e,self._logfile,_print=_print)
                 return {"shoushu":0, "junjia":float("nan"), "che_count":0, "day_order":0, "symbol":symbol, "kaiping":kaiping,"lot":lot,"price":price, "last_msg":f"卖盘无报价,不能使用超价" ,
                     "quote_volume":float('nan'),"order_id":[],"trades":[],"order_wrong":False,"signal_price":signal_price,"order_info":order_info,"profit_count":0,"profit_money":0,"quote":quote,"position":position}
         elif price == '对手价':
@@ -846,8 +854,8 @@ class PeopleQuantApi():
                     or (quote["LowerLimitPrice"] <= price_sell <= quote["UpperLimitPrice"] and sell))
                     or max(price_buy,price_sell) < quote["UpperLimitPrice"] == quote["LowerLimitPrice"] > 0) 
             or not isinstance(lot,int) or n_price_tick < 0 or che_time < 0):
-            e = f"{datetime.now()} -open_close下单价格或数量或撤单跳数或撤单时间不合法,下单价格:{price},买入价:{price_buy},卖出价:{price_sell},下单手数:{lot},撤单跳数:{n_price_tick},撤单时间:{che_time}\n"
-            with self.data_lock: self.logs_txt(e,self._logfile,_print=False)
+            e = f"{datetime.now()} -open_close下单价格或数量或撤单跳数或撤单时间不合法,合约:{symbol},交易方向:{kaiping},下单价格:{price},买入价:{price_buy},卖出价:{price_sell},下单手数:{lot},撤单跳数:{n_price_tick},撤单时间:{che_time}\n"
+            with self.data_lock: self.logs_txt(e,self._logfile,_print=_print)
             if price == price: order_wrong = True #非报单价nan值错误
             return {"shoushu":0, "junjia":float("nan"), "che_count":0, "day_order":0, "symbol":symbol, "kaiping":kaiping,"lot":lot,"price":price_buy if buy else price_sell,
                     "last_msg":f"下单价格或数量或撤单跳数或撤单时间不合法,下单价格:{price},买入价:{price_buy},卖出价:{price_sell},下单手数:{lot},撤单跳数:{n_price_tick},撤单时间:{che_time}" ,
@@ -859,8 +867,8 @@ class PeopleQuantApi():
             #以持仓数量平仓时平仓数量为0可能是服务器故障持仓未更新(也可能其他程序超额平仓,或清仓代码正常所需非本策略bug),等待更新后可继续下单,其他情况下的报价和手数错误应退出交易
             if not (lot == position["pos_long"] == 0 and kaiping == 'pingduo' or lot == position["pos_short"] == 0 and kaiping=='pingkong'): 
                 order_wrong = True 
-            e = f"{datetime.now()} -open_close报单错误,下单价格:{price},买入价:{price_buy},卖出价:{price_sell},下单手数:{lot},最大限价单:{instrument_property['MaxLimitOrderVolume']},最小限价单:{instrument_property['MinLimitOrderVolume']},最小开仓单:{open_min_volume},价格最小跳:{PriceTick}\n"
-            with self.data_lock: self.logs_txt(e,self._logfile,_print=False)
+            e = f"{datetime.now()} -open_close报单错误,合约:{symbol},交易方向:{kaiping},下单价格:{price},买入价:{price_buy},卖出价:{price_sell},下单手数:{lot},最大限价单:{instrument_property['MaxLimitOrderVolume']},最小限价单:{instrument_property['MinLimitOrderVolume']},最小开仓单:{open_min_volume},价格最小跳:{PriceTick}\n"
+            with self.data_lock: self.logs_txt(e,self._logfile,_print=_print)
             return {"shoushu":0, "junjia":float("nan"), "che_count":0, "day_order":0, "symbol":symbol, "kaiping":kaiping,"lot":lot,"price":price_buy if buy else price_sell,
                     "last_msg":f"报单错误,下单价格:{price},买入价:{price_buy},卖出价:{price_sell},下单手数:{lot},最大限价单:{instrument_property['MaxLimitOrderVolume']},最小限价单:{instrument_property['MinLimitOrderVolume']},最小开仓单:{open_min_volume},价格最小跳:{PriceTick}" ,
                     "quote_volume":quote_volume,"order_id":[],"trades":[],"order_wrong":order_wrong,"signal_price":signal_price,"order_info":order_info,"profit_count":0,"profit_money":0,"quote":signal_quote,"position":position}
@@ -869,14 +877,32 @@ class PeopleQuantApi():
                 or sell and quote["AskPrice1"] <= price_sell-PriceTick*n_price_tick):
                 et = f"{datetime.now()} -"
                 e = "{},{},{}\n".format(
-                    f"open_close报单错误,交易方向:{kaiping},下单价格:{price},买入价:{price_buy},卖出价:{price_sell}",
+                    f"open_close报单错误,合约:{symbol},交易方向:{kaiping},下单价格:{price},买入价:{price_buy},卖出价:{price_sell}",
                     f"当前排队价{quote['BidPrice1'] if buy else quote['AskPrice1']}",
                     f"已满足撤单条件:价格偏离{n_price_tick}跳,极易触发立即撤单"
                 )
-                with self.data_lock: self.logs_txt(et+e,self._logfile,_print=False)
+                with self.data_lock: self.logs_txt(et+e,self._logfile,_print=_print)
                 return {"shoushu":0, "junjia":float("nan"), "che_count":0, "day_order":0, "symbol":symbol, "kaiping":kaiping,"lot":lot,"price":price_buy if buy else price_sell,
                         "last_msg":e , "quote_volume":quote_volume,"order_id":[],"trades":[],"order_wrong":order_wrong,"signal_price":signal_price,
                         "order_info":order_info,"profit_count":0,"profit_money":0,"quote":signal_quote,"position":position}
+        if avoid_self_trade:
+            direction = 'Buy' if sell else 'Sell'
+            #查询相反方向未成交委托单
+            orders = self.get_symbol_order(symbol,OrderStatus="Alive",Direction=direction)
+            for od in orders:
+                if sell and price_sell <= od["LimitPrice"] == quote.BidPrice1:
+                    e = f'{datetime.now()} -open_close报单错误,买一价{quote.BidPrice1}存在未成交的挂单,未成交数量{od["VolumeTotal"]},有自成交可能,合约:{symbol},交易方向:{kaiping},下单价格:{price},买入价:{price_buy},卖出价:{price_sell},下单手数:{lot}\n'
+                    with self.data_lock: self.logs_txt(e,self._logfile,_print=_print)
+                    return {"shoushu":0, "junjia":float("nan"), "che_count":0, "day_order":0, "symbol":symbol, "kaiping":kaiping,"lot":lot,"price":price_buy if buy else price_sell,
+                            "last_msg":f"买一价{quote.BidPrice1}存在未成交的挂单,未成交数量{od['VolumeTotal']},有自成交可能" ,
+                            "quote_volume":quote_volume,"order_id":[],"trades":[],"order_wrong":False,"signal_price":signal_price,"order_info":order_info,"profit_count":0,"profit_money":0,"quote":quote,"position":position}
+                elif buy and price_buy >= od["LimitPrice"] == quote.AskPrice1:
+                    e = f'{datetime.now()} -open_close报单错误,卖一价{quote.AskPrice1}存在未成交的挂单,未成交数量{od["VolumeTotal"]},有自成交可能,合约:{symbol},交易方向:{kaiping},下单价格:{price},买入价:{price_buy},卖出价:{price_sell},下单手数:{lot}\n'
+                    with self.data_lock: self.logs_txt(e,self._logfile,_print=_print)
+                    return {"shoushu":0, "junjia":float("nan"), "che_count":0, "day_order":0, "symbol":symbol, "kaiping":kaiping,"lot":lot,"price":price_buy if buy else price_sell,
+                            "last_msg":f"卖一价{quote.AskPrice1}存在未成交的挂单,未成交数量{od['VolumeTotal']},有自成交可能" ,
+                            "quote_volume":quote_volume,"order_id":[],"trades":[],"order_wrong":False,"signal_price":signal_price,"order_info":order_info,"profit_count":0,"profit_money":0,"quote":quote,"position":position}
+        
         shoushu = 0 #已成交手数  
         junjia = 0.0 #成交均价 
         che_count, day_order = 0, 0 #报撤单次数
@@ -888,13 +914,13 @@ class PeopleQuantApi():
                 pre_open_price = position.open_price_long
                 pre_pos = position.pos_long
                 if ctp_error:
-                    ping_zuo = self.insert_order(ExchangeID,symbol,'Sell','Close', lot, price_sell,advanced=advanced,OrderMemo=OrderMemo,_print=False,ctp_error=ctp_error,_signal_quote=signal_quote)
+                    ping_zuo = self.insert_order(ExchangeID,symbol,'Sell','Close', lot, price_sell,advanced=advanced,OrderMemo=OrderMemo,avoid_self_trade=avoid_self_trade,_print=False,ctp_error=ctp_error,_signal_quote=signal_quote)
                     if isinstance(ping_zuo,str): last_msg += ping_zuo
                 else:
                     #可能服务器故障持仓未更新,等待更新
                     if not position["pos_long"] or position["open_price_long"] != position["open_price_long"]:
-                        e = f"{datetime.now()} -open_close多头持仓错误,多头持仓手数{position['pos_long']},多头持仓价格{position['open_price_long']}\n"
-                        with self.data_lock: self.logs_txt(e,self._logfile,_print=False)
+                        e = f"{datetime.now()} -open_close合约:{symbol},交易方向:{kaiping},多头持仓错误,多头持仓手数{position['pos_long']},多头持仓价格{position['open_price_long']}\n"
+                        with self.data_lock: self.logs_txt(e,self._logfile,_print=_print)
                         return {"shoushu":0, "junjia":float("nan"), "che_count":0, "day_order":0, "symbol":symbol, "kaiping":kaiping,"lot":lot,"price":price_buy if buy else price_sell,
                                 "last_msg":f"多头持仓错误,多头持仓手数{position['pos_long']},多头持仓价格{position['open_price_long']}" ,
                                 "quote_volume":quote_volume, "order_id":[],"trades":[],"order_wrong":order_wrong,"signal_price":signal_price,"order_info":order_info,
@@ -911,27 +937,27 @@ class PeopleQuantApi():
                             close_his_lot = min(available_his, lot)
                             close_today_lot = min(available_today, lot - close_his_lot)
                         if 0 < close_today_lot: # 平今
-                            ping_jin = self.insert_order(ExchangeID,symbol,'Sell','CloseToday', close_today_lot, price_sell,advanced=advanced,OrderMemo=OrderMemo,_print=False,ctp_error=ctp_error,_signal_quote=signal_quote)
+                            ping_jin = self.insert_order(ExchangeID,symbol,'Sell','CloseToday', close_today_lot, price_sell,advanced=advanced,OrderMemo=OrderMemo,avoid_self_trade=avoid_self_trade,_print=False,ctp_error=ctp_error,_signal_quote=signal_quote)
                             if isinstance(ping_jin,str): last_msg += ping_jin
                         if 0 < close_his_lot: # 平昨仓
-                            ping_zuo = self.insert_order(ExchangeID,symbol,'Sell','Close',close_his_lot,price_sell,advanced=advanced,OrderMemo=OrderMemo,_print=False,ctp_error=ctp_error,_signal_quote=signal_quote) 
+                            ping_zuo = self.insert_order(ExchangeID,symbol,'Sell','Close',close_his_lot,price_sell,advanced=advanced,OrderMemo=OrderMemo,avoid_self_trade=avoid_self_trade,_print=False,ctp_error=ctp_error,_signal_quote=signal_quote) 
                             if isinstance(ping_zuo,str): last_msg += ping_zuo
                         if not available_pos: last_msg += "平多单数量不足,下单数量:{},可用今仓:{},可用昨仓:{}" .format(lot,available_today,available_his)
                     else: #其他交易所不区分今昨仓
                         if 0 < lot <= available_pos: #小于等于可用，平仓
-                            ping_zuo = self.insert_order(ExchangeID,symbol,'Sell','Close', lot, price_sell,advanced=advanced,OrderMemo=OrderMemo,_print=False,ctp_error=ctp_error,_signal_quote=signal_quote)
+                            ping_zuo = self.insert_order(ExchangeID,symbol,'Sell','Close', lot, price_sell,advanced=advanced,OrderMemo=OrderMemo,avoid_self_trade=avoid_self_trade,_print=False,ctp_error=ctp_error,_signal_quote=signal_quote)
                             if isinstance(ping_zuo,str): last_msg += ping_zuo
                         else: last_msg += "平多单数量不足,下单数量:{},可用仓位:{}" .format(lot,available_pos)
             elif kaiping=='pingkong': #交易方向为平空
                 pre_open_price = position.open_price_short
                 pre_pos = position.pos_short
                 if ctp_error:
-                    ping_zuo = self.insert_order(ExchangeID,symbol,'Buy','Close', lot, price_buy,advanced=advanced,OrderMemo=OrderMemo,_print=False,ctp_error=ctp_error,_signal_quote=signal_quote)
+                    ping_zuo = self.insert_order(ExchangeID,symbol,'Buy','Close', lot, price_buy,advanced=advanced,OrderMemo=OrderMemo,avoid_self_trade=avoid_self_trade,_print=False,ctp_error=ctp_error,_signal_quote=signal_quote)
                     if isinstance(ping_zuo,str): last_msg += ping_zuo
                 else:
                     if not position["pos_short"] or position["open_price_short"] != position["open_price_short"]:
-                        e = f"{datetime.now()} -open_close空头持仓错误,空头持仓手数{position['pos_short']},空头持仓价格{position['open_price_short']}\n"
-                        with self.data_lock: self.logs_txt(e,self._logfile,_print=False)
+                        e = f"{datetime.now()} -open_close合约:{symbol},交易方向:{kaiping},空头持仓错误,空头持仓手数{position['pos_short']},空头持仓价格{position['open_price_short']}\n"
+                        with self.data_lock: self.logs_txt(e,self._logfile,_print=_print)
                         return {"shoushu":0, "junjia":float("nan"), "che_count":0, "day_order":0, "symbol":symbol, "kaiping":kaiping,"lot":lot,"price":price_buy if buy else price_sell,
                                 "last_msg":f'空头持仓错误,空头持仓手数{position["pos_short"]},空头持仓价格{position["open_price_short"]}' ,
                                 "quote_volume":quote_volume, "order_id":[],"trades":[],"order_wrong":order_wrong,"signal_price":signal_price,"order_info":order_info,
@@ -948,23 +974,23 @@ class PeopleQuantApi():
                             close_his_lot = min(available_his, lot)
                             close_today_lot = min(available_today, lot - close_his_lot)
                         if 0 < close_today_lot : # 平今
-                            ping_jin=self.insert_order(ExchangeID,symbol,'Buy','CloseToday',close_today_lot,price_buy,advanced=advanced,OrderMemo=OrderMemo,_print=False,ctp_error=ctp_error,_signal_quote=signal_quote)    
+                            ping_jin=self.insert_order(ExchangeID,symbol,'Buy','CloseToday',close_today_lot,price_buy,advanced=advanced,OrderMemo=OrderMemo,avoid_self_trade=avoid_self_trade,_print=False,ctp_error=ctp_error,_signal_quote=signal_quote)    
                             if isinstance(ping_jin,str): last_msg += ping_jin
                         if 0 < close_his_lot:      
-                            ping_zuo=self.insert_order(ExchangeID,symbol,'Buy','Close',close_his_lot,price_buy,advanced=advanced,OrderMemo=OrderMemo,_print=False,ctp_error=ctp_error,_signal_quote=signal_quote)
+                            ping_zuo=self.insert_order(ExchangeID,symbol,'Buy','Close',close_his_lot,price_buy,advanced=advanced,OrderMemo=OrderMemo,avoid_self_trade=avoid_self_trade,_print=False,ctp_error=ctp_error,_signal_quote=signal_quote)
                             if isinstance(ping_zuo,str): last_msg += ping_zuo
                         if not available_pos: last_msg += "平空单数量不足,下单数量:{},可用今仓:{},可用昨仓:{}" .format(lot,available_today,available_his)
                     else: #其他交易所不区分今昨仓
                         if 0 < lot <= available_pos: #小于等于可用，平仓
-                            ping_zuo = self.insert_order(ExchangeID,symbol,'Buy','Close', lot, price_buy,advanced=advanced,OrderMemo=OrderMemo,_print=False,ctp_error=ctp_error,_signal_quote=signal_quote)
+                            ping_zuo = self.insert_order(ExchangeID,symbol,'Buy','Close', lot, price_buy,advanced=advanced,OrderMemo=OrderMemo,avoid_self_trade=avoid_self_trade,_print=False,ctp_error=ctp_error,_signal_quote=signal_quote)
                             if isinstance(ping_zuo,str): last_msg += ping_zuo
                         else: last_msg += "平空单数量不足,下单数量:{},可用仓位:{}" .format(lot,available_pos)
                         
             elif kaiping== 'kaiduo': #交易方向为开多
-                order = self.insert_order(ExchangeID,symbol,'Buy','Open',lot,price_buy,advanced=advanced,OrderMemo=OrderMemo,_print=False,ctp_error=ctp_error,_signal_quote=signal_quote)   
+                order = self.insert_order(ExchangeID,symbol,'Buy','Open',lot,price_buy,advanced=advanced,OrderMemo=OrderMemo,avoid_self_trade=avoid_self_trade,_print=False,ctp_error=ctp_error,_signal_quote=signal_quote)   
                 if isinstance(order,str): last_msg += order
             elif kaiping=='kaikong': #交易方向为开空
-                order = self.insert_order(ExchangeID,symbol,"Sell","Open",lot,price_sell,advanced=advanced,OrderMemo=OrderMemo,_print=False,ctp_error=ctp_error,_signal_quote=signal_quote)
+                order = self.insert_order(ExchangeID,symbol,"Sell","Open",lot,price_sell,advanced=advanced,OrderMemo=OrderMemo,avoid_self_trade=avoid_self_trade,_print=False,ctp_error=ctp_error,_signal_quote=signal_quote)
                 if isinstance(order,str): last_msg += order
             else: last_msg += f"交易方向{kaiping}只支持:kaiduo、kaikong、pingduo、pingkong"
         t = datetime.now().timestamp() #时间起点
@@ -1613,13 +1639,13 @@ class PeopleQuantApi():
     async def OpenClose(self,symbol:str, kaiping: str = '', lot: int = 0, price: float = None,block: bool = True, 
                         n_price_tick: int = 1, che_time: int = 0, order_info: str = '无', signal_price: float = float('nan'),
                         close_today: bool = True,order_close_chan: bool = True, advanced: Union[Any , None] = None, open_min_volume: int = 1,
-                        combin_cancel: bool = False,HedgeFlag: str = "1", WaitReturn: bool = False,OrderMemo="pqapi",ctp_error=False,_print: bool = True,**kw):
+                        combin_cancel: bool = False,OrderMemo="pqapi",avoid_self_trade=True,HedgeFlag: str = "1", WaitReturn: bool = False,ctp_error=False,_print: bool = True,**kw):
         '''open_close的协程版'''
         # 关键：用partial绑定open_close的关键字参数
         bound_func = partial(self.open_close, symbol=symbol, kaiping = kaiping, lot = lot, price = price, block = block,n_price_tick = n_price_tick, 
                             che_time = che_time, order_info = order_info, signal_price = signal_price,close_today = close_today,
                             order_close_chan = order_close_chan, advanced = advanced, open_min_volume = open_min_volume,combin_cancel = combin_cancel, 
-                            HedgeFlag = HedgeFlag, WaitReturn = WaitReturn, OrderMemo = OrderMemo,ctp_error=ctp_error,_print=_print,**kw)  # 先把参数绑定到函数上
+                            HedgeFlag = HedgeFlag, WaitReturn = WaitReturn, OrderMemo = OrderMemo,avoid_self_trade=avoid_self_trade,ctp_error=ctp_error,_print=_print,**kw)  # 先把参数绑定到函数上
         
         loop = asyncio.get_running_loop()
         # 此时run_in_executor只需传绑定后的函数，无需额外参数
@@ -2024,7 +2050,6 @@ class PeopleQuantApi():
         d_dividend = Decimal(str(dividend))
         d_divisor = Decimal(str(divisor))
         
-        # 如果除法结果是整数，则说明是其整数倍
-        result = d_dividend / d_divisor
-        return result == int(result)
+        # 如果除法结果是整数,余数为0,则说明是其整数倍
+        return d_dividend % d_divisor == 0
 
