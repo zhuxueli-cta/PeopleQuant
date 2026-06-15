@@ -39,17 +39,17 @@ quote = pqapi.get_quote(symbol)  #获取合约行情
 symbole_info = pqapi.get_symbol_info(symbol) #获取合约属性
 position = pqapi.get_position(symbol)        #获取合约持仓
 #开仓,多头1手
-r = pqapi.open_close(symbol,'kaiduo',1,quote["LowerLimitPrice"],block=False,order_info='验证重复撤单')
+r = pqapi.open_close(symbol,'kaiduo',1,quote["LowerLimitPrice"],n_price_tick=0,block=False,order_info='验证重复撤单')
 pqapi.cancel_order(r['order_id'][0])  #撤单
 pqapi.cancel_order(r['order_id'][0])  #重复撤单
 pqapi.cancel_order(r['order_id'][0])  #重复撤单
 pqapi.cancel_order(r['order_id'][0])  #重复撤单
 #开仓,多头1手
-r = pqapi.open_close(symbol,'kaiduo',1,quote["LowerLimitPrice"],block=False,order_info='验证批量撤单')
-r = pqapi.open_close(symbol,'kaiduo',1,quote["LowerLimitPrice"],block=False,order_info='验证批量撤单')
-r = pqapi.open_close(symbol,'kaiduo',1,quote["LowerLimitPrice"],block=False,order_info='验证批量撤单')
-r = pqapi.open_close(symbol,'kaiduo',1,quote["LowerLimitPrice"],block=False,order_info='验证批量撤单')
-r = pqapi.open_close(symbol,'kaiduo',1,quote["LowerLimitPrice"],block=False,order_info='验证批量撤单')
+r = pqapi.open_close(symbol,'kaiduo',1,quote["LowerLimitPrice"],n_price_tick=0,block=False,order_info='验证批量撤单')
+r = pqapi.open_close(symbol,'kaiduo',1,quote["LowerLimitPrice"],n_price_tick=0,block=False,order_info='验证批量撤单')
+r = pqapi.open_close(symbol,'kaiduo',1,quote["LowerLimitPrice"],n_price_tick=0,block=False,order_info='验证批量撤单')
+r = pqapi.open_close(symbol,'kaiduo',1,quote["LowerLimitPrice"],n_price_tick=0,block=False,order_info='验证批量撤单')
+r = pqapi.open_close(symbol,'kaiduo',1,quote["LowerLimitPrice"],n_price_tick=0,block=False,order_info='验证批量撤单')
 '''批量撤单'''
 pqapi.cancel_all_order(symbol) #撤合约symbol的未成交单
 print("批量撤单完成")
