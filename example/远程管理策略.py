@@ -8,7 +8,7 @@ current_path = os.path.abspath(__file__)
 root_path = os.path.abspath(os.path.join(current_path, "../../../"))
 # 将根目录添加到 sys.path
 if root_path not in sys.path:
-    sys.path.insert(0,root_path)
+    sys.path.insert(0, root_path)
 import time as tm
 import asyncio
 import traceback
@@ -197,7 +197,7 @@ def run_websocket_server(strategies,update_queue,command_queue):
     # 1. 获取并打印连接地址
     local_ip = get_local_ip()
     public_ip = get_public_ip()
-    port = 8080
+    port = 8081
     print("="*50)
     print("服务器已启动，可通过以下地址访问：")
     print(f"本地访问：http://{local_ip}:{port}/trade")
@@ -277,8 +277,9 @@ def run_ctp_service(strategies,update_queue,command_queue):
     #MdFrontAddr = "tcp://121.37.80.177:20004" #openctp
 
     BROKERID="9999"   #期货公司ID
-    USERID=""   #账户
-    PASSWORD=""   #登录密码
+    USERID="122377"   #账户
+    #USERID="234253"
+    PASSWORD="123321txlr!@#$"   #登录密码
     APPID="simnow_client_test"   #客户端ID
     AUTHCODE="0000000000000000"  #授权码
 
@@ -387,10 +388,10 @@ def run_ctp_service(strategies,update_queue,command_queue):
     positions = pqapi.get_position()
     
 
-    cta1 = zhuchannel.WorkThread(cta,args=(pqapi,strategies,'策略1',account,'hc2605',update_queue,command_queue,'策略1',r'C:\CTPLogs' ),kwargs={})
-    cta2 = zhuchannel.WorkThread(cta,args=(pqapi,strategies,'策略2',account,'rb2605',update_queue,command_queue,'策略2',r'C:\CTPLogs' ),kwargs={})
-    cta3 = zhuchannel.WorkThread(cta,args=(pqapi,strategies,'策略3',account,'m2605',update_queue, command_queue,'策略3',r'C:\CTPLogs'),kwargs={})
-    cta4 = zhuchannel.WorkThread(cta,args=(pqapi,strategies,'策略1',account,'y2605',update_queue, command_queue,'策略1',r'C:\CTPLogs'),kwargs={})
+    cta1 = zhuchannel.WorkThread(cta,args=(pqapi,strategies,'策略1',account,'hc2605',update_queue,command_queue,'策略1',r'C:/CTPLogs' ),kwargs={})
+    cta2 = zhuchannel.WorkThread(cta,args=(pqapi,strategies,'策略2',account,'rb2605',update_queue,command_queue,'策略2',r'C:/CTPLogs' ),kwargs={})
+    cta3 = zhuchannel.WorkThread(cta,args=(pqapi,strategies,'策略3',account,'m2605',update_queue, command_queue,'策略3',r'C:/CTPLogs'),kwargs={})
+    cta4 = zhuchannel.WorkThread(cta,args=(pqapi,strategies,'策略1',account,'y2605',update_queue, command_queue,'策略1',r'C:/CTPLogs'),kwargs={})
     cta1.start()
     cta2.start()
     cta3.start()

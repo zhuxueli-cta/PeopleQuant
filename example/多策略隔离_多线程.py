@@ -112,7 +112,7 @@ def cta(name,product_id,symbols, **kw ):
             sell_down = 1  #空头信号
             if order_enable:
                 if buy_up and _pos_dict[product_id][name][symbol]["pos_long"] < lot and risk_control:
-                    price = quote1["AskPrice1"]
+                    price = min(quote1.UpperLimitPrice,quote1["AskPrice1"]) #指定价下单不超过涨停价
                     volume = lot - _pos_dict[product_id][name][symbol]["pos_long"]
                     r = pqapi.open_close(symbol,"kaiduo",volume,price,order_info='开仓')
                     print(name,r['kaiping'],r['shoushu'],r['junjia'],r["last_msg"],_pos_dict[product_id][name][symbol] ,account.float_profit,account.Commission)

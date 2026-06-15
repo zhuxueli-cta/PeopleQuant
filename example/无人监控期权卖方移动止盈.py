@@ -130,7 +130,7 @@ def cta(pqapi:PeopleQuantApi,pos_lock,symbol,account,DingChan,_Position_Log,_pos
     commission_tick = 10/symbole_info.VolumeMultiple/PriceTick #每手手续费计算跳数,根据合约属性计算,也可固定值,如10元/手
     balance = kw["balance"] if "balance" in kw else 0  #账户最低权益
     risk_ratio = kw["risk_ratio"] if "risk_ratio" in kw else 1  #账户风险度
-    OrderMemo = 'pqapi' #报单备注,便于区分其他来源报单,如手工单等,也可不填
+    OrderMemo = 'pqapi'
     #日撤单数、分钟撤单数、日报单数、日开仓数、最大开仓数
     minute_cancels,day_orders = 10,500 #回报数据丢失情况下的本地报单阈值防范
     day_cancels,minute_cancels,day_orders,daylotss,maxlotss = 100,10,500,20000,20000  #阈值
@@ -138,7 +138,6 @@ def cta(pqapi:PeopleQuantApi,pos_lock,symbol,account,DingChan,_Position_Log,_pos
     #报单次数、撤单次数、多空开仓成交总手数、自成交数、信息量       阈值
     orders_insert,orders_cancel,daylots,self_trade,order_exe = 500,200,1000,2,3000
     while True:
-        #只监控本客户端报单,如有手工单等其他来源报单,可在报单备注OrderMemo里区分,如不填则监控所有报单
         orders = pqapi.get_symbol_order(InstrumentID=symbol,OrderStatus='Alive',OrderMemo=OrderMemo,_print=False)
         #报单次数、撤单次数、多空开仓成交总手数、自成交数、信息量
         orderrisk = pqapi.get_order_risk(symbol)
@@ -150,7 +149,7 @@ def cta(pqapi:PeopleQuantApi,pos_lock,symbol,account,DingChan,_Position_Log,_pos
                     _pos_dict[symbol].update({"open_price_long":position.open_price_long,"open_price_short":position.open_price_short,"pos_long":position.pos_long,"pos_short":position.pos_short})
                     if not position.pos_short:
                         _pos_dict[symbol].update({"highest_profit":0,"protect_profit":False})
-                _str_vs_float(_pos_dict,_Position_Log)
+                    _str_vs_float(_pos_dict,_Position_Log)
             #print('方向:',r['kaiping'],'成交手数',r['shoushu'],'成交均价',r['junjia'],'报单信息',r["last_msg"] )
         if UpdateTime != quote.ctp_datetime: #新行情推送
             UpdateTime = quote.ctp_datetime
@@ -164,10 +163,10 @@ def cta(pqapi:PeopleQuantApi,pos_lock,symbol,account,DingChan,_Position_Log,_pos
             
             if position.pos_short :
                 profit_price = quote.AskPrice1 if quote.LowerLimitPrice <= quote.AskPrice1 <= quote.UpperLimitPrice else float('nan')  #+ PriceTick
-                if _pos_dict[symbol]["highest_profit"] >= position.open_price_short * 0.5: 
-                    with pos_lock:_pos_dict[symbol]['protect_profit'] = True  #达到最高利润一半,可以考虑浮盈加仓
+                if _pos_dict[symbol]["highest_profit"] >= position.open_price_short * 0.5: _pos_dict[symbol]['protect_profit'] = True
                 if position.open_price_short - profit_price > _pos_dict[symbol]["highest_profit"]:
-                    with pos_lock:_pos_dict[symbol]["highest_profit"] = position.open_price_short - profit_price
+                    _pos_dict[symbol]["highest_profit"] = position.open_price_short - profit_price
+                    print(quote.ctp_datetime,symbol,position.open_price_short , profit_price,quote.BidPrice1,quote.LastPrice,quote.PreSettlementPrice)
                     _str_vs_float(_pos_dict,_Position_Log)
             if order_enable:
                 profit_price = quote.BidPrice1 + PriceTick
@@ -186,7 +185,7 @@ def cta(pqapi:PeopleQuantApi,pos_lock,symbol,account,DingChan,_Position_Log,_pos
                             _pos_dict[symbol].update({"open_price_long":position.open_price_long,"open_price_short":position.open_price_short,"pos_long":position.pos_long,"pos_short":position.pos_short})
                             if not position.pos_short:
                                 _pos_dict[symbol].update({"highest_profit":0,"protect_profit":False})
-                        _str_vs_float(_pos_dict,_Position_Log)
+                            _str_vs_float(_pos_dict,_Position_Log)
                     else:
                         if r['order_wrong']: #下单错误
                             print(r['last_msg']) #错误信息
@@ -214,13 +213,13 @@ def Cta(ZhangHu=[],s='',error_queue=None,**kw):
         PASSWORD = ZhangHu['PASSWORD']   #登录密码
         APPID = ZhangHu['APPID']   #客户端ID
         AUTHCODE = ZhangHu['AUTHCODE']  #授权码
-        _flog = r'C:\AppData\Roaming\pqapilogs'  #程序所在目录下创建logs目录
+        _flog = r'C:/AppData/Roaming/pqapilogs'  #程序所在目录下创建logs目录
         os.makedirs(_flog,exist_ok=True)
-        if os.path.isfile(_flog+fr'\PositionLog{s}.json') != True: #
-            with open(_flog+fr'\PositionLog{s}.json','w+',encoding='utf-8') as _Position_Log:
+        if os.path.isfile(_flog+fr'/PositionLog{s}.json') != True: #
+            with open(_flog+fr'/PositionLog{s}.json','w+',encoding='utf-8') as _Position_Log:
                 json.dump({},_Position_Log)  
-            _Position_Log=open(_flog+fr'\PositionLog{s}.json','r+',encoding='utf-8') 
-        else : _Position_Log=open(_flog+fr'\PositionLog{s}.json','r+',encoding='utf-8') #
+            _Position_Log=open(_flog+fr'/PositionLog{s}.json','r+',encoding='utf-8') 
+        else : _Position_Log=open(_flog+fr'/PositionLog{s}.json','r+',encoding='utf-8') #
         _pos_dict: dict = json.load(_Position_Log)    #
         if "profit" not in _pos_dict: _pos_dict["profit"] = 0
         #创建api实例
@@ -290,15 +289,15 @@ def Cta(ZhangHu=[],s='',error_queue=None,**kw):
                         quote = pqapi.get_quote(symbol)
                         expd = exp_d(symbole_info)
                         if p.pos_long :
-                            ep += f"{p.instrument_id}-{expd}多单-手数:{p.pos_long},价格:{round(p.open_price_long,quote.price_decs)},浮盈:{round(p.float_profit_long,2)},保证金:{round(p.margin_long,2)},保证金收益率:{round(SafeDivide(p.float_profit_long,p.margin_long),2)}\n"
+                            ep += f"{symbol}-{expd}多单-手数:{p.pos_long},价格:{round(p.open_price_long,quote.price_decs)},浮盈:{round(p.float_profit_long,2)},保证金:{round(p.margin_long,2)},保证金收益率:{round(SafeDivide(p.float_profit_long,p.margin_long),2)}\n"
                         if p.pos_short :
-                            ep += f"{p.instrument_id}-{expd}空单-手数:{p.pos_short},价格:{round(p.open_price_short,quote.price_decs)},浮盈:{round(p.float_profit_short,2)},保证金:{round(p.margin_short,2)},保证金收益率:{round(SafeDivide(p.float_profit_short,p.margin_short),2)}\n"
+                            ep += f"{symbol}-{expd}空单-手数:{p.pos_short},价格:{round(p.open_price_short,quote.price_decs)},浮盈:{round(p.float_profit_short,2)},保证金:{round(p.margin_short,2)},保证金收益率:{round(SafeDivide(p.float_profit_short,p.margin_short),2)}\n"
                         else:
-                            if symbol in _pos_dict and not _pos_dict[symbol]['pos_short']: _pos_dict.pop(symbol) #清除无持仓记录
+                            if not _pos_dict[symbol]['pos_short']: _pos_dict.pop(symbol) #清除无持仓记录
                     for symbol in list(_pos_dict.keys()):
-                        if symbol in ['profit']: continue
-                        if symbol not in positions : #清除已平仓记录
-                            _pos_dict.pop(symbol)
+                        if symbol in ["profit"]:continue
+                        if symbol not in positions: #持仓已清除的合约记录
+                            _pos_dict.pop(symbol) #清除无持仓记录
                     sp += ep  
                     content = "{}{}{}{}".format(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n算法累计盈利:{round(_pos_dict['profit'],2)}\n\n账户今日盈亏:{round(account.Balance-account.static_balance,2)},",
                                                 f"账户今日收益率:{round(SafeDivide(account.Balance-(account.static_balance-account.PreBalance),account.PreBalance),2)}\n\n账户持仓统计:\n账户权益:{round(account.Balance,2)},",
@@ -348,10 +347,10 @@ def Main(ZhangHu=[],s="_all",**kw ):
             print("启动账户",datetime.today())
             child_process = multiprocessing.Process(target=Cta,args=(ZhangHu,s,error_queue,),kwargs=kw)
             child_process.start()
-            #cta_error = error_queue.get()
-            #child_process.join(30)
-            #if cta_error: print("策略异常,账户退出",datetime.today())
-            #else: print("策略子进程退出",datetime.today())
+            cta_error = error_queue.get()
+            child_process.join(30)
+            if cta_error: print("策略异常,账户退出",datetime.today())
+            else: print("策略子进程退出",datetime.today())
         #非交易时段退出子进程
         if not trading and child_process is not None:
             if not child_process.is_alive(): #子进程已结束
@@ -373,18 +372,24 @@ def Main(ZhangHu=[],s="_all",**kw ):
 
 
 if __name__ == "__main__":
-    #DingDing = ["宏源期权移动止盈","https://oapi.dingtalk.com/robot/send?accessc95f26c07c4ca9ddec"]   
+    DingDing = ["宏源期权移动止盈","https://oapi.dingtalk.com/robot/send?access_token=a4168973fdcf82d7e48a3ceeec8fda5f3330102e64b00ac95f26c07c4ca9ddec"]   
+    #webhook = "https://oapi.dingtalk.com/robot/send?access_token=86a14be4fdc65d276385c77c9f22712982c54bfc0eea39835da907a6fc5c8338" #钉钉通知
+    #title = "" #通知抬头
     #QQemail = ["123576@qq.com","sgh323","123576@qq.com","算法通知"]  #发QQ邮箱
     QQemail =[]# ["3416223155@qq.com","hgiutyargkfnchdd","3416223155@qq.com","test测试"]
     #WeChat = ["模拟测试","https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=4ba50e86-aee6-4025-9723-98f8f59bc8f4"]
 
     #设置期货户账户,例如 ZhangHu = ["G国泰君安","期货账号","期货密码"] 为实盘模式 ,括号里不填则为模拟或回测模式
     #模拟交易或回测
-    ZhangHu = {"BROKERID":"H宏源期货_主席","USERID":"","PASSWORD":"",
+    ZhangHu = {"BROKERID":"H宏源期货_主席","USERID":"901212213","PASSWORD":"winwin66",
                "APPID":"","AUTHCODE":"",
                 "TradeFrontAddr":"",
                 "MdFrontAddr":""}
+    #ZhangHu = ["H宏源期货","901212213","winwin66" ]
+    #设置信易账户 TQ = ["注册手机号", "密码"]
+    TQ = ["13823574106", "tower8888"]    
+    #TQ = ["18605584178", "123321fuchen"] 
     #多点运行,区分不同文件
     s = "hyqq" 
 
-    Main(ZhangHu=ZhangHu,s=s,DingDing=[],WeChat=[],QQemail=QQemail)
+    Main(ZhangHu=ZhangHu,s=s,DingDing=DingDing,WeChat=[],QQemail=QQemail)

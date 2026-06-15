@@ -31,12 +31,12 @@ def cta(symbol_ctp,period='5m',loss=15,profit=150 ):
     signals = [] #记录交易信号,用于交易逻辑分析
     Data = polars.DataFrame()
     #添加新行情是否被使用记录
-    quote_lable = pqapi.update_quote_pipe([symbol_ctp],add_or_used='add')
+    quote_lable = pqapi.update_quote_pipe([symbol_ctp],[],add_or_used='add')
     while True:
         if pqapi.backtest_finished :
             #回测结束,将记录的交易信号保存在本地
-            polars.DataFrame(signals).write_csv(fr'{pqapi._backtest.result_file}\backtest_signal_{sum(quote_lable)}.csv')
-            #Data.write_csv(fr'{pqapi._backtest.result_file}\backtest_indicator.csv')
+            polars.DataFrame(signals).write_csv(fr'{pqapi._backtest.result_file}/backtest_signal_{sum(quote_lable)}.csv')
+            #Data.write_csv(fr'{pqapi._backtest.result_file}/backtest_indicator.csv')
             print('回测结束')
             print(f"回测结果已保存至:{pqapi._backtest.result_file}")
             break
@@ -45,6 +45,7 @@ def cta(symbol_ctp,period='5m',loss=15,profit=150 ):
             UpdateTime = quote.ctp_datetime
             #转换为pandas.DataFrame
             #kline_pandas = kline.data.to_pandas()
+            #print(quote)
 
             #计算指标，10日/5日均线，均价金叉死叉
             indicator_signal = (kline.data.tail(30)
@@ -60,7 +61,7 @@ def cta(symbol_ctp,period='5m',loss=15,profit=150 ):
             #生成开仓条件
             buy_up = indicator_signal.height >= 2 and quote.LastPrice > indicator_signal['ma10'][-1] > indicator_signal['ma10'][-2] and quote.LastPrice > indicator_signal['open'][-1]  #多头信号
             sell_down = indicator_signal.height >= 2 and quote.LastPrice < indicator_signal['ma10'][-1] < indicator_signal['ma10'][-2] and quote.LastPrice < indicator_signal['open'][-1]  #空头信号
-            
+            #print((indicator_signal.select(polars.col("ctp_datetime"),polars.col("close"),polars.col("open"),polars.col("ma10") ),quote.LastPrice,buy_up,sell_down,quote.ctp_datetime))
             loss_long = quote.LastPrice < position.open_price_long - loss*symbol_info.PriceTick
             loss_short = quote.LastPrice > position.open_price_short + loss*symbol_info.PriceTick
             profit_long = quote.LastPrice > position.open_price_long + profit*symbol_info.PriceTick and quote.LastPrice < indicator_signal['ma10'][-1]
@@ -70,7 +71,7 @@ def cta(symbol_ctp,period='5m',loss=15,profit=150 ):
             #else: Data = Data.vstack(indicator_signal.tail(1)).unique(subset=['kline_date'],keep='last').sort('ctp_datetime')
             
             if buy_up and not position.pos_short + position.pos_long:
-                price = quote.LastPrice #下单价格
+                price = int(quote.LastPrice/symbol_info.PriceTick)*symbol_info.PriceTick #下单价格
                 #将时间、价格、持仓等参与交易逻辑计算的数据记录下来
                 signals.append({"ctp_datetime":quote.ctp_datetime,"LastPrice":quote.LastPrice,"kline_close":(kline.data)["close"][-1],
                                 "pos_long":position.pos_long,"open_price_long":position.open_price_long,"float_profit_long":position.float_profit_long,
@@ -81,9 +82,9 @@ def cta(symbol_ctp,period='5m',loss=15,profit=150 ):
                                 "PriceTick":symbol_info.PriceTick,'ma10':indicator_signal['ma10'][-1]})
                 #下单
                 r = pqapi.open_close(symbol_ctp,"kaiduo",lot,price)
-                #print(r['kaiping'],r['price'],r['shoushu'],r['junjia'],position.open_price_long,position.open_price_short)
+                print(r['kaiping'],r['price'],r['shoushu'],r['junjia'],r['last_msg'],r["price"],position.open_price_long,position.open_price_short)
             elif sell_down and not position.pos_short + position.pos_long:
-                price = quote.LastPrice
+                price = int(quote.LastPrice/symbol_info.PriceTick)*symbol_info.PriceTick
                 signals.append({"ctp_datetime":quote.ctp_datetime,"LastPrice":quote.LastPrice,"kline_close":(kline.data)["close"][-1],
                                 "pos_long":position.pos_long,"open_price_long":position.open_price_long,"float_profit_long":position.float_profit_long,
                                 "pos_short":position.pos_short,"open_price_short":position.open_price_short,"float_profit_short":position.float_profit_short,
@@ -92,14 +93,14 @@ def cta(symbol_ctp,period='5m',loss=15,profit=150 ):
                                 'open_price_short+':position.open_price_short + 50*symbol_info.PriceTick,'open_price_short-':position.open_price_short - 150*symbol_info.PriceTick,
                                 "PriceTick":symbol_info.PriceTick,'ma10':indicator_signal['ma10'][-1]})
                 r = pqapi.open_close(symbol_ctp,"kaikong",lot,price)
-                #print(r['kaiping'],r['price'],r['shoushu'],r['junjia'],position.open_price_long,position.open_price_short)
+                print(r['kaiping'],r['price'],r['shoushu'],r['junjia'],r['last_msg'],r["price"],position.open_price_long,position.open_price_short)
             #根据最新持仓计算止盈止损条件
             loss_long = quote.LastPrice < position.open_price_long - 50*symbol_info.PriceTick
             loss_short = quote.LastPrice > position.open_price_short + 50*symbol_info.PriceTick
             profit_long = quote.LastPrice > position.open_price_long + 150*symbol_info.PriceTick and quote.LastPrice < indicator_signal['ma10'][-1]
             profit_short = quote.LastPrice < position.open_price_short - 150*symbol_info.PriceTick and quote.LastPrice > indicator_signal['ma10'][-1]
             if position.pos_long and (loss_long or profit_long) :
-                price = quote.LastPrice
+                price = int(quote.LastPrice/symbol_info.PriceTick)*symbol_info.PriceTick
                 signals.append({"ctp_datetime":quote.ctp_datetime,"LastPrice":quote.LastPrice,"kline_close":(kline.data)["close"][-1],
                                 "pos_long":position.pos_long,"open_price_long":position.open_price_long,"float_profit_long":position.float_profit_long,
                                 "pos_short":position.pos_short,"open_price_short":position.open_price_short,"float_profit_short":position.float_profit_short,
@@ -108,9 +109,9 @@ def cta(symbol_ctp,period='5m',loss=15,profit=150 ):
                                 'open_price_short+':position.open_price_short + 50*symbol_info.PriceTick,'open_price_short-':position.open_price_short - 150*symbol_info.PriceTick,
                                 "PriceTick":symbol_info.PriceTick,'ma10':indicator_signal['ma10'][-1]})
                 r = pqapi.open_close(symbol_ctp,"pingduo",position.pos_long,price)
-                #print(r['kaiping'],r['price'],r['shoushu'],r['junjia'],position.open_price_long,position.pos_long,position.pos_short,position.open_price_short)
+                print(r['kaiping'],r['price'],r['shoushu'],r['junjia'],r['last_msg'],r["price"],position.open_price_long,position.pos_long,position.pos_short,position.open_price_short)
             if position.pos_short and (loss_short or profit_short) :
-                price = quote.LastPrice
+                price = int(quote.LastPrice/symbol_info.PriceTick)*symbol_info.PriceTick
                 signals.append({"ctp_datetime":quote.ctp_datetime,"LastPrice":quote.LastPrice,"kline_close":(kline.data)["close"][-1],
                                 "pos_long":position.pos_long,"open_price_long":position.open_price_long,"float_profit_long":position.float_profit_long,
                                 "pos_short":position.pos_short,"open_price_short":position.open_price_short,"float_profit_short":position.float_profit_short,
@@ -119,31 +120,31 @@ def cta(symbol_ctp,period='5m',loss=15,profit=150 ):
                                 'open_price_short+':position.open_price_short + 50*symbol_info.PriceTick,'open_price_short-':position.open_price_short - 150*symbol_info.PriceTick,
                                 "PriceTick":symbol_info.PriceTick,'ma10':indicator_signal['ma10'][-1]})
                 r = pqapi.open_close(symbol_ctp,"pingkong",position.pos_short,price)
-                #print(r['kaiping'],r['price'],r['shoushu'],r['junjia'],position.open_price_long,position.open_price_short)
+                print(r['kaiping'],r['price'],r['shoushu'],r['junjia'],r['last_msg'],r["price"],position.open_price_long,position.open_price_short)
         pqapi.update_quote_pipe([symbol_ctp],quote_lable,add_or_used='used') #新行情已经被使用完毕
         tm.sleep(0.0001) #避免while True空转耗费CPU
 
 if __name__ == '__main__':
     from multiprocessing import freeze_support, current_process
     freeze_support()  
-    back_test = BackTest([r'C:\datas\KQ.m@DCE.m.tick.csv',
-                        #r'C:\datas\KQ.m@SHFE.rb.tick.csv',
-                        ],start_datetime=datetime(2021,10,8,9,0,0),end_datetime=datetime(2026,7,8,15,0,0), balance=1000000.0*1000,
+    back_test = BackTest([r'C:/datas/KQ.m@DCE.m.tick.csv',
+                        r'C:/datas/KQ.m@SHFE.rb.tick.csv',
+                        #r'C:/datas/KQ.m@GFEX.lc.csv',
+                        ],start_datetime=datetime(2024,1,1,9,0,0),end_datetime=datetime(2027,1,1,1,0,0), balance=1000000.0*1000,
                         symbol_infos={'KQ.m@DCE.m':{'ExchangeID': "DCE", 'PriceTick':1, "VolumeMultiple":10, "OpenRatioByMoney":0.1, "OpenRatioByVolume":10,"LimitPriceRatio":0.1},
-                                    #'KQ.m@SHFE.rb':{'ExchangeID': "SHFE", 'PriceTick':1, "VolumeMultiple":10, "OpenRatioByMoney":0.1, "OpenRatioByVolume":10,"LimitPriceRatio":0.1},
+                                    'KQ.m@SHFE.rb':{'ExchangeID': "SHFE", 'PriceTick':1, "VolumeMultiple":10, "OpenRatioByMoney":0.1, "OpenRatioByVolume":10,"LimitPriceRatio":0.1},
                                     },
                         col_mapping = { "datetime": "datetime","InstrumentID": "symbol","LastPrice": "close","AskPrice1": "","BidPrice1": "","AskVolume1": "","BidVolume1": "","Volume": "volume" },
                         datetime_format = "%Y-%m-%d %H:%M:%S%.f",
-                        result_file=r'C:\datas',
+                        result_file=r'C:/datas',
                         draw_line = True)                
     #创建api实例
     pqapi = PeopleQuantApi(BrokerID='', UserID='', PassWord='', save_tick=False,storage_format='csv',
                         backtest=back_test)
     account = pqapi.get_account()
-
     #创建策略线程
     cta1 = zhuchannel.WorkThread(cta,args=('KQ.m@DCE.m','1d' ),kwargs={'loss':30,'profit':60 })
     cta1.start()
-    #cta2 = zhuchannel.WorkThread(cta,args=('KQ.m@SHFE.rb','1h' ),kwargs={'loss':15,'profit':150 })
-    #cta2.start()
+    cta2 = zhuchannel.WorkThread(cta,args=('KQ.m@SHFE.rb','1h' ),kwargs={'loss':15,'profit':150 })
+    cta2.start()
     #print("✅ 回测完成，主线程退出")

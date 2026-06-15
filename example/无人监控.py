@@ -186,6 +186,7 @@ def cta(pqapi:PeopleQuantApi,symbol,account,DingChan,**kw ):
             else: #权益、风险度、报撤单等超过阈值
                 print(account,orderrisk)    
                 pqapi.send_message(DingChan, account, orderrisk, name="test",e="权益、风险度、报撤单等超过阈值")  #发邮箱提醒
+        else: tm.sleep(0.005)
 
 #策略子进程
 def Cta(error_queue=None,**kw):  
