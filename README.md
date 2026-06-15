@@ -1,32 +1,20 @@
-# PeopleQuant
+# PeopleQuant  
+详细用法介绍查看帮助文档和源码。  
 CTP接口的Python版，跨平台的交易接口，精而美的Python SDK。  
-CTP接口是连接交易柜台的门户，本项目力图解决交易前的风控、交易后的数据反馈、各种交易场景下的数据查询，解决交易上的“最后一公里问题”，并能嵌入其他交易平台，借助其他平台的优势，以及结合Python支持的科学计算、机器学习、AI等现代技术，开发各种高效策略。
-
-```
-ThostFtdcTraderApi.h C++头文件，包含交易相关的指令，如报单。
-ThostFtdcMdApi.h C++头文件，包含获取行情相关的指令。
-ThostFtdcUserApiStruct.h 包含了所有用到的数据结构。
-ThostFtdcUserApiDataType.h 包含了所有用到的数据类型。
-thosttraderapi_se.dll 交易部分的动态链接库。
-thosttraderapi_se.lib 交易部分的静态链接库。
-thostmduserapi_se.dll 行情部分的动态链接库。
-thostmduserapi_se.lib行情部分的静态链接库。
-error.dtd 包含所有可能的错误信息。
-error.xml包含所有可能的错误信息
-```
-
-本项目基于openctp编译的Python版CTP接口开发。  
-CTP原生接口的交易接口和行情接口编译成Python版接口后形成了如下文件列表：  
-```
-_thostmduserapi.pyd
-_thosttraderapi.pyd
-thostmduserapi.py
-thostmduserapi_se.dll
-thosttraderapi.py
-thosttraderapi_se.dll
-``` 
-本项目采用openctp项目中编译好的Python接口。接口地址：[openctp接口文件](http://www.openctp.cn/CTPAPI-Python.html)  
-
+CTP接口是连接交易柜台的门户，本项目力图解决交易前的风控、交易后的数据反馈、各种交易场景下的数据查询，解决交易上的“最后一公里问题”，并能嵌入其他交易平台，借助其他平台的优势，以及结合Python支持的科学计算、机器学习、AI等现代技术，开发各种高效策略。  
+  
+本项目采用openctp项目中编译好的Python接口。接口地址：[openctp接口文件](http://www.openctp.cn/CTPAPI-Python.html)   
+PeopleQuant 支持 simnow 模拟、 openctp 仿真、 实盘交易(期货、 期权、交易所标准组合)、 离线数据回测。  
+# 核心优势  
+CTP直连：本地部署策略代码更安全，自动选择网络延时最低的柜台前置，让交易快人 一步。   
+指令检查：多维度的指令检查，多方位防范错误交易指令发送向交易所。   
+强大的功能组件：强大高效的业务数据查询、交易函数，使各种策略开发场景更便利。   
+跨平台：可嵌入其他交易平台，结合其他平台的优势，以及结合Python支持的科学计算、机器学习、AI等现代技术，开发各种高效策略。   
+支持最新Python：支持最新Python，拥抱现代科技，让策略开发有无限可能。   
+可扩展：作为Python SDK，可借助PeopleQuant开发个性化交易软件。   
+使用简单：业务函数简单易用，学习曲线平缓。   
+生产级的学习示例：生产级的学习用例可快速上手，也可作为多种策略场景下的开发模板。    
+# 系统架构 
 框架的层次结构图如下：  
 <img width="649" height="789" alt="3FFC60F5F890D0FDBC2B8E0B2F937DE9" src="https://github.com/user-attachments/assets/5c9bdc43-a3b7-483f-a884-f1939872470b" />
 
@@ -52,15 +40,19 @@ CTP框架的设计思路：
     策略层若没有其他持仓数据的接口来源，只能通过CTP底层读取，则需要跟随行情实时计算，跟随委托单、成交单实时计算。  
 
 三、 事前风控  
-    策略层不能拿到持仓数据做风控，就需要在CTP底层做风控，对报单参数检查，价格是最小变动价位整数，对可用资金检查，等等。  
-
+    登录账户时，会查询全市场合约、持仓、资金、委托单、成交单、持仓品种手续费保证金，并在本地内存中跟随行情实时计算持仓、资金，跟随委托单、成交单实时计算持仓、资金。并每隔5秒重新查询资金，以更新出入金、组合优惠等对资金的影响。  
+    查询、报单之前，对合约等参数检查，例如合约码是否存在、价格是否最小变动价位整数倍、可用资金是否足够等等。  
+  
 四、 事后反馈  
     结果记录日志，并向策略层反馈。  
 
 五、 多线程/多进程  
     CTP底层、策略层、数据分析层采用多线程或多进程设计，各层分工，避免相互阻塞。  
+      
+六、技术指标库  
+    技术指标库 indicators.py 涵盖几十种常用的技术指标， 利用 polars 向量化计算， 比传统pandas 数据计算速度快几倍。  
 
-六、 业务数据及业务函数阻塞逻辑  
+七、 业务数据及业务函数阻塞逻辑  
     PeopleQuant中的业务数据为持仓、委托单、成交单、账户资金、行情快照，均为字典格式，CTP推送业务数据时，后台会完成数据的更新，字典是可变数据类型，业务函数返回的数据会自动跟着更新，因此无需重复使用业务函数获取数据。  
     PeopleQuant中的业务函数设计为阻塞模式，即调用业务函数向CTP查询数据时，需要等待结果反馈，若查询成功，返回值会得到业务数据，若查询失败，则返回None或缺省值。  
     调用业务函数时，首先会从内存中查询是否已存在数据，例如合约的行情已经订阅，就直接从内存中取，无需重复订阅，持仓数据已在内存中更新，就直接返回相应持仓，无需重复向CTP查询持仓，这会大大增加执行效率，因为向CTP查询有1秒1次的查询流控，频繁查询会造成CTP更新滞后。  
@@ -68,35 +60,16 @@ CTP框架的设计思路：
     下单发向交易柜台之前，也会在本端对价格、可用手数、可用资金做下事前风控判断，避免错误的参数发向柜台。  
 
 目前本项目完成了CTP底层的基础开发，实现了交易所需的基本功能，可嵌入到其他交易平台中，利用其他平台计算的交易信号，调用本接口交易。  
-项目文件：  
-
-```
-_thostmduserapi.pyd
-_thosttraderapi.pyd
-thostmduserapi.py
-thostmduserapi_se.dll
-thosttraderapi.py
-thosttraderapi_se.dll
-__init__.py    #包标识
-ctpapi.cp38-win_amd64.pyd   #ctp接口编译文件
-trade_mdforopenctp.py      #实际应用接口文件
-zhuchannel.py              #接口所需的队列、线程类
-zhustruct.py               #业务数据结构和K线生成类
-example.py                 #策略示例
-6.7.11_API接口说明.chm     #CTP接口说明
-```
-
-本项目推出两个Python版：旧版Python3.8，支持win7以上系统；最新版Python3.13，支持Win10以上系统。  
-对应两个CTP版本：6.7.2；最新版6.7.11。  
 
 #### 安装教程
 
 ```
 pip install -U peoplequant  
 ```
+#### 目录结构
+安装完成后，项目路径在Python扩展库目录下：/site-packages/peoplequant  
 
 #### 使用说明
-
 1.  字段说明：  
     CTP接口中已有的字段保持原字段使用，CTP中的字段一般是大写字母开头（如InstrumentID表示合约代码），项目中新增的字段，例如持仓浮动盈亏（float_profit_long），采用小写字母开头，以做区分。  
     CTP接口的字段含义可从API接口说明.chm和.h头文件中查询。  
