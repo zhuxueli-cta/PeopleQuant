@@ -12,7 +12,7 @@ try:
 except ImportError: pass
 from threading import Thread,RLock
 from queue import Queue
-
+from pathlib import Path
 nReason = {4097:'网络读失败',4098:'网络写失败',8193:'接收心跳超时',8194:'发送心跳失败',8195:'收到错误报文'}
 HedgeFlag={'speculation':'1',   #投机
             'arbitrage':'2',    #套利
@@ -175,7 +175,7 @@ class Account(FullDictDataClass):
         #基本准备金
         self.Reserve = 0.0
         #交易日
-        self.TradingDay = ""
+        self.TradingDay:str = ""
         #结算编号
         self.SettlementID = ""
         #信用额度
@@ -571,7 +571,7 @@ class Quote(FullDictDataClass):
         #  处理动态扩展字段（通过基类初始化）
         super().__init__(kwargs)  # 等价于：self.__dict__.update(kwargs)
         #交易日
-        self.TradingDay = ""
+        self.TradingDay:str = ""
         #合约代码
         self.InstrumentID = ""
         #交易所代码
@@ -611,9 +611,9 @@ class Quote(FullDictDataClass):
         #今虚实度
         self.CurrDelta = float("nan")
         #最后修改时间
-        self.UpdateTime = ""
+        self.UpdateTime:str = ""
         #最后修改毫秒
-        self.UpdateMillisec = 0
+        self.UpdateMillisec:int = 0
         #申买价一
         self.BidPrice1 = float("nan")
         #申买量一
@@ -657,25 +657,25 @@ class Quote(FullDictDataClass):
         #当日均价
         self.AveragePrice = float("nan")
         #业务日期
-        self.ActionDay = ''
+        self.ActionDay:str = ''
         #上带价
         self.BandingUpperPrice = float("nan")
         #下带价
         self.BandingLowerPrice = float("nan")
         #本地时间戳
-        self.local_timestamp = 0
+        self.local_timestamp:int = 0
         #CTP行情时间戳
-        self.ctp_timestamp = 0
+        self.ctp_timestamp:int = 0
         #CTP行情datetime
-        self.ctp_datetime = 0
+        self.ctp_datetime:datetime = 0
         #价格小数位数
-        self.price_decs = 0
+        self.price_decs:int = 0
         #交易日
-        self.trading_day = 0
+        self.trading_day:date = 0
         #期货"FUTURE",看涨期权"CALL",看跌期权"PUT",组合合约"COMB
-        self.ins_class = ""
+        self.ins_class:str = ""
         #是否已被使用标志
-        self.used = False  
+        self.used:bool = False  
         
 
 class InstrumentProperty(FullDictDataClass):
@@ -879,18 +879,20 @@ class CTPDataProcessor():
             try:
                 self._flowfile = os.path.dirname(os.path.abspath(__file__)) #当前程序目录(该py文件__file__所在目录)
             except: self._flowfile = os.getcwd()   #程序工作目录下创建目录 
-            self._logfile = fr"{self._flowfile}\logs"
+            self._logfile = fr"{self._flowfile}/logs"
         else: self._logfile = _logfile
-        self.tick_dir = fr"{self._logfile}\tick_data"
-        self.kline_dir = fr"{self._logfile}\kline_data"
+        self.tick_dir = fr"{self._logfile}/tick_data"
+        self.kline_dir = fr"{self._logfile}/kline_data"
         self._kline_tick_queue = kline_tick_queue
         self.backtest = backtest
         # 新增批量缓存
         self.tick_batch_cache = defaultdict(list)
         self.BATCH_THRESHOLD = 100  # 累计100条再写入
         # 创建数据目录
-        os.makedirs(self.tick_dir, exist_ok=True)
-        os.makedirs(self.kline_dir, exist_ok=True)
+        #os.makedirs(self.tick_dir, exist_ok=True)
+        #os.makedirs(self.kline_dir, exist_ok=True)
+        Path(self.tick_dir).mkdir(parents=True, exist_ok=True)
+        Path(self.kline_dir).mkdir(parents=True, exist_ok=True)
         #self.db_path = os.path.join(self._logfile, "ticks.duckdb")
         # 1. 定义目标 schema（与 _ensure_tick_table 一致）
         self.target_schema = {
@@ -1203,7 +1205,8 @@ class CTPDataProcessor():
     def _get_kline_file_path(self, instrument_id: str, period: str) -> str:
         """获取K线文件路径（根据存储格式自动选择扩展名）"""
         period_dir = os.path.join(self.kline_dir, period)
-        os.makedirs(period_dir, exist_ok=True)
+        #os.makedirs(period_dir, exist_ok=True)
+        Path(period_dir).mkdir(parents=True, exist_ok=True)
         return os.path.join(period_dir, f"{instrument_id}_kline.{self.storage_format}")
 
     # 本地数据加载

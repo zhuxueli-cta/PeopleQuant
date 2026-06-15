@@ -7,6 +7,7 @@ import queue
 import multiprocessing 
 import threading
 import sys,asyncio,os
+from pathlib import Path
 import collections
 import traceback
 import copy
@@ -20,8 +21,9 @@ REGISTRY_LOCK = threading.Lock()
 #日志            
 def logs_txt(e,logfile):
     print(e)
-    os.makedirs(logfile,exist_ok=True)
-    ss = logfile+f"\\{date.today()}.txt"
+    #os.makedirs(logfile,exist_ok=True)
+    Path(logfile).mkdir(parents=True, exist_ok=True)
+    ss = logfile+f"/{date.today()}.txt"
     ff = open(ss,mode="a+",encoding='utf-8')
     ff.write("\n"+datetime.today().isoformat(" ")+"-"*30+"\n")
     ff.write(e)
