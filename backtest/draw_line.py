@@ -2,6 +2,7 @@
 #  -*- coding: utf-8 -*-
 import sys
 import os
+from pathlib import Path
 import subprocess
 import multiprocessing
 import threading
@@ -122,7 +123,8 @@ def plot_realtime_metrics(
             # 其他系统桌面路径
             CURRENT_DIR = os.path.join(os.environ.get("HOME", ""), "Desktop")
         # 确保桌面目录存在（防止异常情况）
-        os.makedirs(CURRENT_DIR, exist_ok=True)
+        #os.makedirs(CURRENT_DIR, exist_ok=True)
+        Path(CURRENT_DIR).mkdir(parents=True, exist_ok=True)
         REALTIME_HTML_PATH = os.path.join(CURRENT_DIR, "plotly_realtime_backtest.html")
     
     # 3. 提前删除旧文件（避免残留）
@@ -556,7 +558,7 @@ def draw_main(data_queue:multiprocessing.Queue):
 # -------------------------- 主程序测试（可选） --------------------------
 if __name__ == "__main__":
     try:
-        sample_data = pl.read_csv(fr'C:\datas\backtest_result.csv', try_parse_dates=True)
+        sample_data = pl.read_csv(fr'C:/datas/backtest_result.csv', try_parse_dates=True)
         plot_metrics_separately(
             sample_data,
             max_display_points=1000,
