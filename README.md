@@ -1,5 +1,5 @@
 # PeopleQuant  
-###详细用法介绍查看帮助文档和源码。  
+### 详细用法介绍查看帮助文档和源码。  
 CTP接口的Python版，跨平台的交易接口，精而美的Python SDK。  
 CTP接口是连接交易柜台的门户，本项目力图解决交易前的风控、交易后的数据反馈、各种交易场景下的数据查询，解决交易上的“最后一公里问题”，并能嵌入其他交易平台，借助其他平台的优势，以及结合Python支持的科学计算、机器学习、AI等现代技术，开发各种高效策略。  
   
@@ -123,9 +123,13 @@ get_option          #根据标的价格查询某档位的期权
 open_close        #实用的开平仓下单及结果处理
 "更多功能敬请期待……"
 ```
+### 捐赠作者
+如果本项目对您产生了帮助，欢迎对作者 祝学礼 捐赠支持
+<img width="298" height="447" alt="61cfd3891ec0f89ff8dae45d32809ca1" src="https://github.com/user-attachments/assets/5806a2dc-ff18-41d4-9a6b-b4dff7df2cb8" />
+
 #### 社区交流
 QQ交流群： 1016612332  
-<img width="352" height="443" alt="9672dd68758b565a8ea73adec21ca5c9_qrcode_1764224390681" src="https://github.com/user-attachments/assets/08b4095d-8a4b-4167-8a58-70bdda0301ab" />
+<img width="246" height="310" alt="9672dd68758b565a8ea73adec21ca5c9_qrcode_1764224390681" src="https://github.com/user-attachments/assets/08b4095d-8a4b-4167-8a58-70bdda0301ab" />
 
 微信公众号：  
 ![6964854ccb8fe49c0fc1c64e6ac81d58_%E5%BE%AE%E4%BF%A1%E5%9B%BE%E7%89%87_20251106130341_5_396](https://github.com/user-attachments/assets/e16862bf-3cbb-48ae-ae40-dd4f478d2bf6)
