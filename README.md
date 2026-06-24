@@ -124,8 +124,8 @@ open_close        #实用的开平仓下单及结果处理
 "更多功能敬请期待……"
 ```
 ### 捐赠作者
-如果本项目对您产生了帮助，欢迎对作者 祝学礼 捐赠支持
-<img width="298" height="447" alt="61cfd3891ec0f89ff8dae45d32809ca1" src="https://github.com/user-attachments/assets/5806a2dc-ff18-41d4-9a6b-b4dff7df2cb8" />
+如果本项目对您产生了帮助，欢迎对作者 祝学礼 捐赠支持  
+<img width="208" height="313" alt="61cfd3891ec0f89ff8dae45d32809ca1" src="https://github.com/user-attachments/assets/5806a2dc-ff18-41d4-9a6b-b4dff7df2cb8" />
 
 #### 社区交流
 QQ交流群： 1016612332  
