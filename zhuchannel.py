@@ -19,10 +19,12 @@ WORK_THREAD_REGISTRY: List["WorkThread"] = []
 REGISTRY_LOCK = threading.Lock()
 
 #日志            
-def logs_txt(e,logfile):
-    print(e)
+def logs_txt(e,logfile='',_print=True):
+    if _print: print(e)
     #os.makedirs(logfile,exist_ok=True)
-    Path(logfile).mkdir(parents=True, exist_ok=True)
+    if not logfile:
+        logfile = os.path.dirname(os.path.abspath(__file__)) + "/pqapi_errorlogs"
+        Path(logfile).mkdir(parents=True, exist_ok=True)
     ss = logfile+f"/{date.today()}.txt"
     ff = open(ss,mode="a+",encoding='utf-8')
     ff.write("\n"+datetime.today().isoformat(" ")+"-"*30+"\n")
@@ -126,36 +128,36 @@ class ThreadChan(queue.Queue):
         product = kw.get('product', "")
         exchange = kw.get('exchange', "")
         #session层级总指令时间满足
-        ftd = not self._FTDdeque or t - self._FTDdeque[0] > 1
+        ftd = len(self._FTDdeque) < self._FTDmaxsize["Session"] or t - self._FTDdeque[0] > 1
         req = False
         if reqfunc == "ReqQry" and "ReqQry" in self._FTDmaxsize:
             #session层级请求时间满足
-            req = not self._ReqQrydeque or t - self._ReqQrydeque[0] > 1
+            req = len(self._ReqQrydeque) < self._FTDmaxsize["ReqQry"] or t - self._ReqQrydeque[0] > 1
             
         elif reqfunc == "OrderInsert" and "OrderInsert" in self._FTDmaxsize:
             #session层级报单时间满足
-            req = not self._OrderInsertdeque or t - self._OrderInsertdeque[0] > 1
+            req = len(self._OrderInsertdeque) < self._FTDmaxsize["OrderInsert"] or t - self._OrderInsertdeque[0] > 1
             #session层级报撤单时间满足
             if "order_exe" in self._FTDmaxsize: 
-                req = req and (not self._order_exedeque or t - self._order_exedeque[0] > 1)
+                req = req and (len(self._order_exedeque) < self._FTDmaxsize["order_exe"] or t - self._order_exedeque[0] > 1)
             #session层级交易所报撤单时间满足
             if exchange in self._ex_order_exe: 
-                req = req and (not self._ex_order_exe[exchange] or t - self._ex_order_exe[exchange][0] > 1)
+                req = req and (len(self._ex_order_exe[exchange]) < self._FTDmaxsize["ex_order_exe"] or t - self._ex_order_exe[exchange][0] > 1)
             #session层级分品种报单时间满足
             if product in self._OrderInsertProduct: 
-                req = req and (not self._OrderInsertProduct[product] or t - self._OrderInsertProduct[product][0] > 1)
+                req = req and (len(self._OrderInsertProduct[product]) < self._FTDmaxsize["OrderInsert"] or t - self._OrderInsertProduct[product][0] > 1)
         elif reqfunc == "OrderAction" and "OrderAction" in self._FTDmaxsize:
             #session层级撤单时间满足
-            req = not self._OrderActiondeque or t - self._OrderActiondeque[0] > 1
+            req = len(self._OrderActiondeque) < self._FTDmaxsize["OrderAction"] or t - self._OrderActiondeque[0] > 1
             #session层级报撤单时间满足
             if "order_exe" in self._FTDmaxsize: 
-                req = req and (not self._order_exedeque or t - self._order_exedeque[0] > 1)
+                req = req and (len(self._order_exedeque) < self._FTDmaxsize["order_exe"] or t - self._order_exedeque[0] > 1)
             #session层级交易所报撤单时间满足
             if exchange in self._ex_order_exe: 
-                req = req and (not self._ex_order_exe[exchange] or t - self._ex_order_exe[exchange][0] > 1)
+                req = req and (len(self._ex_order_exe[exchange]) < self._FTDmaxsize["ex_order_exe"] or t - self._ex_order_exe[exchange][0] > 1)
             #session层级分品种撤单时间满足
             if product in self._OrderActionProduct: 
-                req = req and (not self._OrderActionProduct[product] or t - self._OrderActionProduct[product][0] > 1)
+                req = req and (len(self._OrderActionProduct[product]) < self._FTDmaxsize["OrderAction"] or t - self._OrderActionProduct[product][0] > 1)
         return ftd and req
 
     def remove_extra(self,dq:collections.deque,keep_count):
@@ -255,13 +257,44 @@ class WorkThread(threading.Thread):
             self.done = True
             # 如果是CTP API实例，等待其内部循环结束
             if self._api is True and self.api is not None: self.api._Join()
-        except:
-            e = traceback.format_exc()
-            print(e)
+        except Exception as es:
+            ees = traceback.format_exc()
+            logfile = os.path.dirname(os.path.abspath(__file__)) + "/pqapi_errorlogs"
+            Path(logfile).mkdir(parents=True, exist_ok=True)
+            #print(f"异常栈路径:{logfile}")
+            logs_txt(ees,logfile)
+            # 获取报错原始堆栈帧
+            tb = es.__traceback__
+            stack_detail = []
+            while tb is not None:
+                frame = tb.tb_frame
+                lineno = tb.tb_lineno
+                func_name = frame.f_code.co_name
+                # 当前栈帧局部变量（仅提取简单类型，避免打印大对象卡死）
+                raw_locals = frame.f_locals
+                simple_locals = {}
+                for k, v in list(raw_locals.items()):
+                    # 过滤掉复杂大对象，只打印基础类型排查关键参数
+                    #if isinstance(v, (int, float, str, bool, list, tuple, dict, type(None))):
+                        simple_locals[k] = v
+                    #else:
+                    #    simple_locals[k] = f"<{type(v).__name__} object>"
+                line_info = f"[栈层级 {func_name}:行{lineno}]局部变量={simple_locals}"
+                stack_detail.append(line_info)
+                # 向上一层调用栈
+                tb = tb.tb_next
+                # 释放引用防止内存泄漏
+                del frame
+            # 反转，从上到下展示调用链路（run → target → 报错函数）
+            stack_detail.reverse()
+            full_context = "\n".join(stack_detail)
+            logs_txt(f"异常全调用链局部变量上下文：\n{full_context}",logfile,_print=False)
+            # 清理栈引用
+            del tb
             #with WorkThread._global_lock:
             #    WorkThread._global_exception = True
             #    WorkThread._global_exception_info = e
-            if self.exception_queue is not None:self.exception_queue.put(e)
+            if self.exception_queue is not None:self.exception_queue.put(ees)
         finally:
             pass 
     def stop(self):

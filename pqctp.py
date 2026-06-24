@@ -59,6 +59,7 @@ class PeopleQuantApi():
         self._quote_queue = zhuchannel.ThreadChan() #mdapi向tradeapi发送行情
         self.quote_queue = quote_queue #各层从mdapi接收行情
         self._Reqqueue = zhuchannel.ThreadChan(maxsize=1) #请求队列
+        self._Orderqueue = zhuchannel.ThreadChan( ) #报撤单队列
         self.MarketDataqueue = []
         if self.quote_queue is not None:
             self.MarketDataqueue.append(quote_queue)
@@ -75,6 +76,7 @@ class PeopleQuantApi():
         self._exception_queue = zhuchannel.ThreadChan()  # 用于传递异常的队列
         self._rtn_queue = zhuchannel.ThreadChan()  # 用于接收CTP主动发出的回报队列
         self._ans_queue = zhuchannel.ThreadChan( )  # 用于接收CTP反馈的结果队列
+        self._ans_order_queue = zhuchannel.ThreadChan( )  # 用于接收CTP反馈的结果队列
         self._rtn_quote_queue = zhuchannel.ThreadChan()  # 用于接收CTP主动发出的行情队列
         self._ReqID = 0  #请求编号
         self.executor = ThreadPoolExecutor()
@@ -101,7 +103,7 @@ class PeopleQuantApi():
         md_UserID = _mdaccount['UserID'] if _mdaccount['UserID'] else UserID
         md_PassWord = _mdaccount['PassWord'] if _mdaccount['PassWord'] else PassWord
         self._tradekwargs = {"BrokerID":BrokerID,"UserID":UserID,"Password":PassWord,"AppID":AppID, "AuthCode":AuthCode,"backtest":self._backtest,"s":s,"flowfile":self._flowfile,"Subscribequeue":self._subscribequeue,
-                             "quote_queue":self._quote_queue,"Reqqueue":self._Reqqueue,"Notify":{"rtn_queue":self._rtn_queue,"ans_queue":self._ans_queue,"quote_queue":self._rtn_quote_queue},"ProductionMode":ProductionMode,
+                             "quote_queue":self._quote_queue,"Reqqueue":self._Reqqueue,"Orderqueue":self._Orderqueue,"Notify":{"rtn_queue":self._rtn_queue,"ans_queue":self._ans_queue,"ans_order_queue":self._ans_order_queue,"quote_queue":self._rtn_quote_queue},"ProductionMode":ProductionMode,
                              "TradeFrontAddr":TradeFrontAddr,"PQexception_queue":self._exception_queue,"MarketDataqueue":self.MarketDataqueue,"_FTDmaxsize":self._FTDmaxsize,"vip_code":vip_code,**kw}
         self._mdkwargs = {"BrokerID":md_BrokerID,"UserID":md_UserID,"Password":md_PassWord, "AppID":AppID, "AuthCode":AuthCode,"backtest":self._backtest,"s":s,"flowfile":self._flowfile,"Subscribequeue":self._subscribequeue,
                           "quote_queue":self._quote_queue,"Notify":{"rtn_queue":self._rtn_queue,"ans_queue":self._ans_queue},"ProductionMode":ProductionMode,"_FTDmaxsize":self._FTDmaxsize,"bIsUsingUdp":bIsUsingUdp,
@@ -521,10 +523,10 @@ class PeopleQuantApi():
         '''
         r = self._sendReq({"reqfuncname":"get_symbol_option","UnderlyingInstrID":UnderlyingInstrID,"OptionsType":OptionsType,})
         if not r['ret']: 
-            e = f"{datetime.now()} -get_symbol_option查询期权为空:{r['ret']}\n"
+            e = f"{datetime.now()} -get_symbol_option查询期权为空:{r['ret']},UnderlyingInstrID：{UnderlyingInstrID},OptionsType：{OptionsType}\n"
             with self.data_lock: self.logs_txt(e,self._logfile,_print=_print)
         return r['ret']
-    def get_option(self,underlying_price,price_level,group_option:polars.DataFrame) ->  Union[dict,None]:
+    def get_option(self,underlying_price,price_level,group_option:polars.DataFrame) ->  Dict[str, Union[str,float,int,None]]:
         '''
         查询以价格underlying_price为基准的档位price_level对应的期权,若查询不到返回None
         Args:
@@ -661,7 +663,7 @@ class PeopleQuantApi():
             e = f'{quote.ctp_datetime if self._backtest else datetime.now()} -cancel_order撤单失败,合约{self.orders[order_id]["InstrumentID"]}未处于交易时间,当前时间:{ctp_time},委托单号:{order_id}\n'
             with self.data_lock: self.logs_txt(e,self._logfile,_print=_print)
             return e
-        r = self._sendReq({"reqfuncname":"cancel_order","order_id":order_id,"OrderMemo":OrderMemo,"wait_return":wait_return,})
+        r = self._sendOrder({"reqfuncname":"cancel_order","order_id":order_id,"OrderMemo":OrderMemo,"wait_return":wait_return,})
         if not r['ret'] or isinstance(r['ret'],str) :
             e = f"{datetime.now()} -cancel_order撤单失败,order_id:{order_id},错误信息:{r['ret']}\n"
             with self.data_lock: self.logs_txt(e,self._logfile,_print=_print)
@@ -714,7 +716,7 @@ class PeopleQuantApi():
         if LimitPrice < quote["AskPrice1"] and Direction == "Buy":advanced = None
         if LimitPrice > quote["BidPrice1"] and Direction == "Sell":advanced = None
         if '&' in InstrumentID: advanced = None
-        r = self._sendReq({"reqfuncname":"insert_order","ExchangeID":ExchangeID,"InstrumentID":InstrumentID,"Direction":Direction,"Offset":Offset,"Volume":Volume,"LimitPrice":LimitPrice,
+        r = self._sendOrder({"reqfuncname":"insert_order","ExchangeID":ExchangeID,"InstrumentID":InstrumentID,"Direction":Direction,"Offset":Offset,"Volume":Volume,"LimitPrice":LimitPrice,
                             "advanced":advanced,"HedgeFlag":HedgeFlag,"WaitReturn":WaitReturn,"OrderMemo":OrderMemo,"avoid_self_trade":avoid_self_trade,"ctp_error":ctp_error,"_signal_quote":_signal_quote, })
         if not isinstance(r['ret'],dict) :
             e = f"{datetime.now()} -insert_order报单失败,客户端拒绝或报单错误,错误信息:{r['ret']}\n"
@@ -722,9 +724,12 @@ class PeopleQuantApi():
             return r['ret']
         else:  #{order_id:order}
             order_id = list(r['ret'].keys())[0]
-            while order_id not in self.orders: tm.sleep(0.003)
-            return self.orders[order_id]
-            return Order( ).update(list(r['ret'].values())[0]).update({"local_timestamp":tm.time()})
+            #while order_id not in self.orders: tm.sleep(0.003)
+            with self.data_lock: 
+                if order_id not in self.orders:
+                    self.orders[order_id] = Order( ).update(list(r['ret'].values())[0]).update({"local_timestamp":tm.time()})
+                return self.orders[order_id]
+            #return Order( ).update(list(r['ret'].values())[0]).update({"local_timestamp":tm.time()})
 
     def open_close(self,symbol:str,kaiping:str='',lot:int=0,price=None,block=True,n_price_tick=1,che_time=0,order_info='无',signal_price=float('nan'),close_today=True,
                    order_close_chan=True,advanced=None,open_min_volume=1,combin_cancel=False,OrderMemo:str="pqapi",avoid_self_trade=True,HedgeFlag:str="1",WaitReturn=False,ctp_error=False,_print=True,**kw):
@@ -1493,16 +1498,36 @@ class PeopleQuantApi():
         '''
         #等待CTP准备就绪
         #while not self._Reqqueue.empty(): tm.sleep(0.000000001) 
-        self._ReqID += 1
-        ReqID = self._ReqID
-        self._Reqqueue.put({**kw,"ReqID":ReqID})
-        n = 0
+        with self.data_lock: 
+            self._ReqID += 1
+            ReqID = self._ReqID
+            self._Reqqueue.put({**kw,"ReqID":ReqID})
+        #n = 0
         while True:
             r = self._ans_queue.get()
-            n += 1
+            #n += 1
             if not isinstance(r,dict): continue  #断线重连,非数据反馈
             if ReqID in r and "return" in r and r["return"]: break #查询完成,得到最终结果
             elif ReqID not in r: self._ans_queue.put_nowait(r) #非本次查询
+        return {"ReqID":ReqID,"ret":r[ReqID]}
+    def _sendOrder(self,kw):
+        '''
+        不需要向ctp查询的直接收到的是结果,需要向ctp查询的首先收到的是发送成败
+        r[ReqID]True和False表示向CTP发送成功或失败,r["return"]表示r[ReqID]为最终结果
+        '''
+        #等待CTP准备就绪
+        #while not self._Reqqueue.empty(): tm.sleep(0.000000001) 
+        with self.data_lock:
+            self._ReqID += 1
+            ReqID = self._ReqID
+            self._Orderqueue.put({**kw,"ReqID":ReqID})
+        #n = 0
+        while True:
+            r = self._ans_order_queue.get()
+            #n += 1
+            if not isinstance(r,dict): continue  #断线重连,非数据反馈
+            if ReqID in r and "return" in r and r["return"]: break #查询完成,得到最终结果
+            elif ReqID not in r: self._ans_order_queue.put_nowait(r) #非本次查询
         return {"ReqID":ReqID,"ret":r[ReqID]}
     
     def subscribe_quote(self,InstrumentID:str,wait_return=False,_print=True):
