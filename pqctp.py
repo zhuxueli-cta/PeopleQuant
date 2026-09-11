@@ -7,7 +7,7 @@ from pathlib import Path
 current_path = os.path.abspath(__file__)
 # 每调用一次 os.path.dirname() 就向上一层
 peoplequant_dir = os.path.dirname(current_path)      # PeopleQuant 目录
-parent_dir = os.path.dirname(peoplequant_dir)    # 再上层：目标父目录
+parent_dir = os.path.dirname(peoplequant_dir)    # 再上层:目标父目录
 # 将根目录添加到 sys.path
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
@@ -59,7 +59,7 @@ class PeopleQuantApi():
         self._quote_queue = zhuchannel.ThreadChan() #mdapi向tradeapi发送行情
         self.quote_queue = quote_queue #各层从mdapi接收行情
         self._Reqqueue = zhuchannel.ThreadChan(maxsize=1) #请求队列
-        self._Orderqueue = zhuchannel.ThreadChan( ) #报撤单队列
+        self._Orderqueue = zhuchannel.ThreadChan(maxsize=1) #报撤单队列
         self.MarketDataqueue = []
         if self.quote_queue is not None:
             self.MarketDataqueue.append(quote_queue)
@@ -150,7 +150,7 @@ class PeopleQuantApi():
                 for idx, thread in enumerate(threads):
                     print(f"线程 {idx + 1}:")
                     print(f"  名称: {thread.name}")
-                    print(f"  ID: {thread.ident}")  # 线程ID（可能为None，未启动时）
+                    print(f"  ID: {thread.ident}")  # 线程ID(可能为None，未启动时)
                     print(f"  是否存活: {thread.is_alive()}")
                     print(f"  是否为守护线程: {thread.daemon}")
                 #raise Exception(e)
@@ -205,6 +205,12 @@ class PeopleQuantApi():
         '''
         if InstrumentID and not self.check_instrument(InstrumentID): return
         if InstrumentID in self.positions:
+            if InstrumentID not in self.quote:
+                if '&' in InstrumentID :
+                    leg1,leg2 = InstrumentID.split(' ')[-1].split('&')
+                    self.get_quote(leg1)
+                    self.get_quote(leg2)
+                self.get_quote(InstrumentID)
             return self.positions[InstrumentID]
         else:
             if InstrumentID : 
@@ -523,7 +529,7 @@ class PeopleQuantApi():
         '''
         r = self._sendReq({"reqfuncname":"get_symbol_option","UnderlyingInstrID":UnderlyingInstrID,"OptionsType":OptionsType,})
         if not r['ret']: 
-            e = f"{datetime.now()} -get_symbol_option查询期权为空:{r['ret']},UnderlyingInstrID：{UnderlyingInstrID},OptionsType：{OptionsType}\n"
+            e = f"{datetime.now()} -get_symbol_option查询期权为空:{r['ret']},UnderlyingInstrID:{UnderlyingInstrID},OptionsType:{OptionsType}\n"
             with self.data_lock: self.logs_txt(e,self._logfile,_print=_print)
         return r['ret']
     def get_option(self,underlying_price,price_level,group_option:polars.DataFrame) ->  Dict[str, Union[str,float,int,None]]:
@@ -607,7 +613,7 @@ class PeopleQuantApi():
         Args:
             InstrumentID: 合约代码,如rb2601P3500
             InputPrice: 期权合约报价
-            UnderlyingPrice： 标的合约价格,默认昨结算价
+            UnderlyingPrice: 标的合约价格,默认昨结算价
         Return:
             若查询不到返回缺省值0
             保证金率字典,包含健 
@@ -627,7 +633,7 @@ class PeopleQuantApi():
         Args:
             InstrumentID: 合约代码,如rb2601P3500
             InputPrice: 期权合约报价
-            UnderlyingPrice： 标的合约价格,默认昨结算价
+            UnderlyingPrice: 标的合约价格,默认昨结算价
         Return:
             float,保证金
         '''
@@ -703,7 +709,7 @@ class PeopleQuantApi():
         #VolumeMultiple = instrument_property["VolumeMultiple"]
         LimitPrice = float(LimitPrice)
         if ( Direction not in ["Buy","Sell"] or Offset not in ["Open","Close","CloseToday"] or ExchangeID != exchange_id
-            or LimitPrice != LimitPrice or not isinstance(Volume,int) or not self.is_multiple_of_decimal(LimitPrice,PriceTick) or
+            or LimitPrice != LimitPrice or not isinstance(Volume,int) or not self.is_multiple_of_decimal(LimitPrice,PriceTick)[0] or
             Volume <= 0 or Volume < instrument_property["MinLimitOrderVolume"] or Volume > instrument_property["MaxLimitOrderVolume"] 
             or (LimitPrice > quote["UpperLimitPrice"] and Direction == "Buy" or LimitPrice < quote["LowerLimitPrice"] and Direction == "Sell")): 
             e = ("{},{},{}\n".format(
@@ -731,7 +737,7 @@ class PeopleQuantApi():
                 return self.orders[order_id]
             #return Order( ).update(list(r['ret'].values())[0]).update({"local_timestamp":tm.time()})
 
-    def open_close(self,symbol:str,kaiping:str='',lot:int=0,price=None,block=True,n_price_tick=1,che_time=0,order_info='无',signal_price=float('nan'),close_today=True,
+    def open_close(self,symbol:str,kaiping:str='',lot:int=0,price=None,block=True,n_price_tick=1,che_time=0,order_info='无',signal_price=float('nan'),close_today=True,combin_self_pos=True,
                    order_close_chan=True,advanced=None,open_min_volume=1,combin_cancel=False,OrderMemo:str="pqapi",avoid_self_trade=True,HedgeFlag:str="1",WaitReturn=False,ctp_error=False,_print=True,**kw):
         '''
         报单,只支持限价下单,市价单以停板价报单,实际效果等效于市价单(部分交易所不支持市价单)
@@ -740,7 +746,7 @@ class PeopleQuantApi():
             kaiping: str,开平,kaiduo,kaikong,pingduo,pingkong,汉语拼音,表示 开多 开空 平多 平空
             lot: int,下单手数
             price:float,下单价格,默认超价,可设置对手价、排队价、停板价,或指定价格,避免传入nan值
-                        如果用盘口报价计算指定价，建议先检查盘口报价是否为nan值（如AskPrice1 ！= AskPrice1 或 BidPrice1 ！= BidPrice1 或涨跌停,则存在nan值）
+                        如果用盘口报价计算指定价，建议先检查盘口报价是否为nan值(如AskPrice1 ！= AskPrice1 或 BidPrice1 ！= BidPrice1 或涨跌停,则存在nan值)
                         同时注意,指定价格避免同时满足n_price_tick撤单条件,避免下单即撤
             block:True,阻塞等待委托单结束
             n_price_tick: 排队价格偏离报单价多少跳不成交撤单,0不按价格偏离撤单。注意用price指定价下单时,需避免指定价同时满足n_price_tick撤单条件,否则可能出现下单即撤的情况
@@ -748,6 +754,7 @@ class PeopleQuantApi():
             order_info:报单备注,例如是止损、止盈、策略1触发等
             signal_price:信号触发的价格位置
             close_today:上期所是否优先平今,默认True,优先平今仓位,False优先平昨仓位
+            combin_self_pos:组合合约是否使用组合持仓,默认True,使用组合持仓时,会优先使用组合持仓平仓,否则使用单腿持仓平仓(组合无持仓但单腿可形成组合平仓)
             order_close_chan:True,统计平仓单的盈亏
             open_min_volume:开仓最小手数,有些合约有最小开仓数量限制
             combin_cancel: n_price_tick和che_time是否适用于组合合约撤单
@@ -773,7 +780,7 @@ class PeopleQuantApi():
         order_wrong = False #是否错单
         quote = self.get_quote(symbol)
         signal_quote = copy.deepcopy(quote) #触发报单的行情
-        position = self.get_position(symbol)
+        position = self.get_position(symbol) if '&' not in symbol or combin_self_pos else self.get_comb_position(symbol) #持仓信息
         instrument_property = self.get_symbol_info(symbol)
         quote_volume = quote["AskVolume1"] if buy else quote["BidVolume1"] #盘口挂单量
         ctp_time = quote.ctp_datetime.time()
@@ -787,7 +794,7 @@ class PeopleQuantApi():
                     "quote_volume":quote_volume,"order_id":[],"trades":[],"order_wrong":False,"signal_price":signal_price,"order_info":order_info,"profit_count":0,"profit_money":0,"quote":signal_quote,"position":position}
         ExchangeID = instrument_property["ExchangeID"]
         PriceTick = instrument_property["PriceTick"]
-        VolumeMultiple = instrument_property["VolumeMultiple"]
+        VolumeMultiple = instrument_property["VolumeMultiple"] if '&' not in symbol else self.get_symbol_info(symbol.split(' ')[-1].split('&')[-1])["VolumeMultiple"] #组合合约取最后一个合约的乘数
         not_Combination = instrument_property["ProductClass"] not in ['3',3] #非组合合约
         ctp_time = (quote["ctp_datetime"]+timedelta(minutes=close_minutes)).time()
         equal_time =  quote["ctp_datetime"].hour == datetime.now().hour #行情和本地时间同步确保夜盘品种在白盘已更新
@@ -871,8 +878,11 @@ class PeopleQuantApi():
                     "last_msg":f"下单价格或数量或撤单跳数或撤单时间不合法,下单价格:{price},买入价:{price_buy},卖出价:{price_sell},下单手数:{lot},撤单跳数:{n_price_tick},撤单时间:{che_time}" ,
                     "quote_volume":quote_volume,"order_id":[],"trades":[],"order_wrong":order_wrong,"signal_price":signal_price,"order_info":order_info,"profit_count":0,"profit_money":0,"quote":signal_quote,"position":position}
         lot = int(lot)
-        if not ctp_error: lot = min(lot, instrument_property["MaxLimitOrderVolume"])
-        if ( not self.is_multiple_of_decimal(price_buy,PriceTick) or not self.is_multiple_of_decimal(price_sell,PriceTick) or
+        if not ctp_error: 
+            lot = min(lot, instrument_property["MaxLimitOrderVolume"])
+            price_buy = self.is_multiple_of_decimal(price_buy,PriceTick)[1]
+            price_sell = self.is_multiple_of_decimal(price_sell,PriceTick)[1]
+        if ( not self.is_multiple_of_decimal(price_buy,PriceTick)[0] or not self.is_multiple_of_decimal(price_sell,PriceTick)[0] or
             lot <= 0 or lot < instrument_property["MinLimitOrderVolume"] or lot < open_min_volume and "kai" in kaiping): 
             #以持仓数量平仓时平仓数量为0可能是服务器故障持仓未更新(也可能其他程序超额平仓,或清仓代码正常所需非本策略bug),等待更新后可继续下单,其他情况下的报价和手数错误应退出交易
             if not (lot == position["pos_long"] == 0 and kaiping == 'pingduo' or lot == position["pos_short"] == 0 and kaiping=='pingkong'): 
@@ -939,25 +949,26 @@ class PeopleQuantApi():
                 available_today = position.pos_long_today - pos_frozen["long_frozen_today"] #今仓可用
                 available_his = position.pos_long_his - pos_frozen["long_frozen_his"] #昨仓可用
                 available_pos = available_today + available_his #总可用仓位
-                if ExchangeID in ["SHFE","INE"]:
-                    if close_today:
-                        close_today_lot = min(available_today, lot)
-                        close_his_lot = min(available_his, lot - close_today_lot)
-                    else:
-                        close_his_lot = min(available_his, lot)
-                        close_today_lot = min(available_today, lot - close_his_lot)
-                    if 0 < close_today_lot: # 平今
-                        ping_jin = self.insert_order(ExchangeID,symbol,'Sell','CloseToday', close_today_lot, price_sell,advanced=advanced,OrderMemo=OrderMemo,avoid_self_trade=avoid_self_trade,_print=False,ctp_error=ctp_error,_signal_quote=signal_quote)
-                        if isinstance(ping_jin,str): last_msg += ping_jin
-                    if 0 < close_his_lot: # 平昨仓
-                        ping_zuo = self.insert_order(ExchangeID,symbol,'Sell','Close',close_his_lot,price_sell,advanced=advanced,OrderMemo=OrderMemo,avoid_self_trade=avoid_self_trade,_print=False,ctp_error=ctp_error,_signal_quote=signal_quote) 
-                        if isinstance(ping_zuo,str): last_msg += ping_zuo
-                    if not available_pos: last_msg += "平多单数量不足,下单数量:{},可用今仓:{},可用昨仓:{}" .format(lot,available_today,available_his)
-                else: #其他交易所不区分今昨仓
-                    if 0 < lot <= available_pos: #小于等于可用，平仓
+                if 0 < lot <= available_pos: #小于等于可用，平仓
+                    if ExchangeID in ["SHFE","INE"]:
+                        if close_today:
+                            close_today_lot = min(available_today, lot)
+                            close_his_lot = min(available_his, lot - close_today_lot)
+                        else:
+                            close_his_lot = min(available_his, lot)
+                            close_today_lot = min(available_today, lot - close_his_lot)
+                        if 0 < close_today_lot: # 平今
+                            ping_jin = self.insert_order(ExchangeID,symbol,'Sell','CloseToday', close_today_lot, price_sell,advanced=advanced,OrderMemo=OrderMemo,avoid_self_trade=avoid_self_trade,_print=False,ctp_error=ctp_error,_signal_quote=signal_quote)
+                            if isinstance(ping_jin,str): last_msg += ping_jin
+                        if 0 < close_his_lot: # 平昨仓
+                            ping_zuo = self.insert_order(ExchangeID,symbol,'Sell','Close',close_his_lot,price_sell,advanced=advanced,OrderMemo=OrderMemo,avoid_self_trade=avoid_self_trade,_print=False,ctp_error=ctp_error,_signal_quote=signal_quote) 
+                            if isinstance(ping_zuo,str): last_msg += ping_zuo
+                        #if not available_pos: last_msg += "平多单数量不足,下单数量:{},可用今仓:{},可用昨仓:{}" .format(lot,available_today,available_his)
+                    else: #其他交易所不区分今昨仓
+                        #if 0 < lot <= available_pos: #小于等于可用，平仓
                         ping_zuo = self.insert_order(ExchangeID,symbol,'Sell','Close', lot, price_sell,advanced=advanced,OrderMemo=OrderMemo,avoid_self_trade=avoid_self_trade,_print=False,ctp_error=ctp_error,_signal_quote=signal_quote)
                         if isinstance(ping_zuo,str): last_msg += ping_zuo
-                    else: last_msg += "平多单数量不足,下单数量:{},可用仓位:{}" .format(lot,available_pos)
+                else: last_msg += "平多单数量不足,下单数量:{},可用仓位:{},可用今仓:{},可用昨仓:{}" .format(lot,available_pos,available_today,available_his)
         elif kaiping=='pingkong': #交易方向为平空
             pre_open_price = position.open_price_short
             pre_pos = position.pos_short
@@ -976,25 +987,26 @@ class PeopleQuantApi():
                 available_today = position.pos_short_today - pos_frozen["short_frozen_today"] #今仓可用
                 available_his = position.pos_short_his - pos_frozen["short_frozen_his"] #昨仓可用
                 available_pos = available_today + available_his #总可用仓位
-                if ExchangeID in ["SHFE","INE"]:
-                    if close_today:
-                        close_today_lot = min(available_today, lot)
-                        close_his_lot = min(available_his, lot - close_today_lot)
-                    else:
-                        close_his_lot = min(available_his, lot)
-                        close_today_lot = min(available_today, lot - close_his_lot)
-                    if 0 < close_today_lot : # 平今
-                        ping_jin=self.insert_order(ExchangeID,symbol,'Buy','CloseToday',close_today_lot,price_buy,advanced=advanced,OrderMemo=OrderMemo,avoid_self_trade=avoid_self_trade,_print=False,ctp_error=ctp_error,_signal_quote=signal_quote)    
-                        if isinstance(ping_jin,str): last_msg += ping_jin
-                    if 0 < close_his_lot:      
-                        ping_zuo=self.insert_order(ExchangeID,symbol,'Buy','Close',close_his_lot,price_buy,advanced=advanced,OrderMemo=OrderMemo,avoid_self_trade=avoid_self_trade,_print=False,ctp_error=ctp_error,_signal_quote=signal_quote)
-                        if isinstance(ping_zuo,str): last_msg += ping_zuo
-                    if not available_pos: last_msg += "平空单数量不足,下单数量:{},可用今仓:{},可用昨仓:{}" .format(lot,available_today,available_his)
-                else: #其他交易所不区分今昨仓
-                    if 0 < lot <= available_pos: #小于等于可用，平仓
+                if 0 < lot <= available_pos: #小于等于可用，平仓
+                    if ExchangeID in ["SHFE","INE"]:
+                        if close_today:
+                            close_today_lot = min(available_today, lot)
+                            close_his_lot = min(available_his, lot - close_today_lot)
+                        else:
+                            close_his_lot = min(available_his, lot)
+                            close_today_lot = min(available_today, lot - close_his_lot)
+                        if 0 < close_today_lot : # 平今
+                            ping_jin=self.insert_order(ExchangeID,symbol,'Buy','CloseToday',close_today_lot,price_buy,advanced=advanced,OrderMemo=OrderMemo,avoid_self_trade=avoid_self_trade,_print=False,ctp_error=ctp_error,_signal_quote=signal_quote)    
+                            if isinstance(ping_jin,str): last_msg += ping_jin
+                        if 0 < close_his_lot:      
+                            ping_zuo=self.insert_order(ExchangeID,symbol,'Buy','Close',close_his_lot,price_buy,advanced=advanced,OrderMemo=OrderMemo,avoid_self_trade=avoid_self_trade,_print=False,ctp_error=ctp_error,_signal_quote=signal_quote)
+                            if isinstance(ping_zuo,str): last_msg += ping_zuo
+                        #if not available_pos: last_msg += "平空单数量不足,下单数量:{},可用今仓:{},可用昨仓:{}" .format(lot,available_today,available_his)
+                    else: #其他交易所不区分今昨仓
+                        #if 0 < lot <= available_pos: #小于等于可用，平仓
                         ping_zuo = self.insert_order(ExchangeID,symbol,'Buy','Close', lot, price_buy,advanced=advanced,OrderMemo=OrderMemo,avoid_self_trade=avoid_self_trade,_print=False,ctp_error=ctp_error,_signal_quote=signal_quote)
                         if isinstance(ping_zuo,str): last_msg += ping_zuo
-                    else: last_msg += "平空单数量不足,下单数量:{},可用仓位:{}" .format(lot,available_pos)
+                else: last_msg += "平空单数量不足,下单数量:{},可用仓位:{},可用今仓:{},可用昨仓:{}" .format(lot,available_pos,available_today,available_his)
                     
         elif kaiping== 'kaiduo': #交易方向为开多
             order = self.insert_order(ExchangeID,symbol,'Buy','Open',lot,price_buy,advanced=advanced,OrderMemo=OrderMemo,avoid_self_trade=avoid_self_trade,_print=False,ctp_error=ctp_error,_signal_quote=signal_quote)   
@@ -1039,6 +1051,7 @@ class PeopleQuantApi():
                         ctp_timestamp = quote.ctp_timestamp
                     if ping_zuo["OrderStatus"] not in finished and not not_Combination:
                         quote = self.get_market_data(symbol)
+                        tm.sleep(0.5)
                 else: break
             day_order += 1 #报单数加1
             volume = ping_zuo["VolumeTraded"] #成交手数
@@ -1090,6 +1103,7 @@ class PeopleQuantApi():
                         ctp_timestamp = quote.ctp_timestamp
                     if ping_jin["OrderStatus"] not in finished and not not_Combination:
                         quote = self.get_market_data(symbol)
+                        tm.sleep(0.5)
                 else: break
             day_order += 1 #报单数加1
             volume = ping_jin["VolumeTraded"] #成交手数
@@ -1141,6 +1155,7 @@ class PeopleQuantApi():
                         ctp_timestamp = quote.ctp_timestamp
                     if order["OrderStatus"] not in finished and not not_Combination:
                         quote = self.get_market_data(symbol)
+                        tm.sleep(0.5)
                 else: break
             day_order += 1 #报单数加1
             volume = order["VolumeTraded"] #成交手数
@@ -1168,6 +1183,7 @@ class PeopleQuantApi():
                 trade_id = f'{trade["ExchangeID"]}_{trade["OrderSysID"]}_{trade["TradeID"]}'
                 while trade_id not in self.trades: tm.sleep(0.001) #查询的数据可能快于后台更新,确保成交后的持仓也更新完成
             if kaiping in ['pingduo', 'pingkong']:
+                position = self.get_position(symbol) if '&' not in symbol or combin_self_pos else self.get_comb_position(symbol) #持仓信息
                 if kaiping == 'pingduo':
                     last_open_price = position.open_price_long
                     last_pos = position.pos_long
@@ -1195,7 +1211,8 @@ class PeopleQuantApi():
                 "quote_volume":quote_volume, "order_id":order_id,"trades":trades,"order_wrong":order_wrong,"signal_price":signal_price,"order_info":order_info,
                 "profit_count":profit_count,"profit_money":profit_money,"quote":signal_quote,"position":position} #返回成交手数、成交均价,和主动撤单次数，若无成交则均价为nan值
 
-    def check_order(self,order,block=True,n_price_tick=1,che_time=0,order_info='无',signal_price=float('nan'),order_close_chan=True,combin_cancel=False,HedgeFlag:str="1",WaitReturn=False,OrderMemo="pqapi",_print=True,**kw):
+    def check_order(self,order,block=True,n_price_tick=1,che_time=0,order_info='无',signal_price=float('nan'),order_close_chan=True,combin_cancel=False,
+                    combin_self_pos=True,HedgeFlag:str="1",WaitReturn=False,OrderMemo="pqapi",_print=True,**kw):
         '''
         检查委托单,并获取委托单成交结果
         盘中程序重启,或早盘前重启,open_close丢失委托单监控,可由check_order取得监控
@@ -1208,7 +1225,7 @@ class PeopleQuantApi():
         symbol = order["InstrumentID"]
         ExchangeID = order["ExchangeID"] #交易所代码
         quote = self.get_quote(symbol)
-        position = self.get_position(symbol)
+        position = self.get_position(symbol) if '&' not in symbol or combin_self_pos else self.get_comb_position(symbol) #持仓信息
         instrument_property = self.get_symbol_info(symbol)
         n_price_tick = int(n_price_tick) #价格偏离委托价多少跳数撤单
         che_time = int(che_time) #等待多少秒撤单
@@ -1280,6 +1297,7 @@ class PeopleQuantApi():
                         ctp_timestamp = quote.ctp_timestamp
                     if order["OrderStatus"] not in finished and not not_Combination:
                         quote = self.get_market_data(symbol)
+                        tm.sleep(0.5)
                 else: break
             day_order += 1 #报单数加1
             volume = order["VolumeTraded"] #成交手数
@@ -1306,6 +1324,7 @@ class PeopleQuantApi():
                 trade_id = f'{trade["ExchangeID"]}_{trade["OrderSysID"]}_{trade["TradeID"]}'
                 while trade_id not in self.trades: tm.sleep(0.001)
             if kaiping in ['pingduo', 'pingkong']:
+                position = self.get_position(symbol) if '&' not in symbol or combin_self_pos else self.get_comb_position(symbol) #持仓信息
                 if kaiping == 'pingduo':
                     last_open_price = position.open_price_long
                     last_pos = position.pos_long
@@ -1668,24 +1687,25 @@ class PeopleQuantApi():
             
     async def OpenClose(self,symbol:str, kaiping: str = '', lot: int = 0, price: float = None,block: bool = True, 
                         n_price_tick: int = 1, che_time: int = 0, order_info: str = '无', signal_price: float = float('nan'),
-                        close_today: bool = True,order_close_chan: bool = True, advanced: Union[Any , None] = None, open_min_volume: int = 1,
+                        close_today: bool = True,combin_self_pos=True,order_close_chan: bool = True, advanced: Union[Any , None] = None, open_min_volume: int = 1,
                         combin_cancel: bool = False,OrderMemo="pqapi",avoid_self_trade=True,HedgeFlag: str = "1", WaitReturn: bool = False,ctp_error=False,_print: bool = True,**kw):
         '''open_close的协程版'''
-        # 关键：用partial绑定open_close的关键字参数
+        # 关键:用partial绑定open_close的关键字参数
         bound_func = partial(self.open_close, symbol=symbol, kaiping = kaiping, lot = lot, price = price, block = block,n_price_tick = n_price_tick, 
-                            che_time = che_time, order_info = order_info, signal_price = signal_price,close_today = close_today,
+                            che_time = che_time, order_info = order_info, signal_price = signal_price,close_today = close_today,combin_self_pos=combin_self_pos,
                             order_close_chan = order_close_chan, advanced = advanced, open_min_volume = open_min_volume,combin_cancel = combin_cancel, 
                             HedgeFlag = HedgeFlag, WaitReturn = WaitReturn, OrderMemo = OrderMemo,avoid_self_trade=avoid_self_trade,ctp_error=ctp_error,_print=_print,**kw)  # 先把参数绑定到函数上
         
         loop = asyncio.get_running_loop()
         # 此时run_in_executor只需传绑定后的函数，无需额外参数
-        result = await loop.run_in_executor(self.executor, bound_func)
+        future = loop.run_in_executor(self.executor, bound_func)
+        result = await future
         return result
     
-    # 通用异步协程：调用阻塞函数（通过线程池）
+    # 通用异步协程:调用阻塞函数(通过线程池)
     async def async_wrapper(self,func,*args,executor=None,**kws ):
         '''将阻塞函数提交进线程池(若线程池已满需排队等待直到有线程执行结束),以支持协程中使用,事件循环工作在某单个线程中(可以不属于self.executor)'''
-        # 关键：用partial绑定open_close的关键字参数
+        # 关键:用partial绑定open_close的关键字参数
         bound_func = partial(func,*args,**kws)  # 先把参数绑定到函数上
         loop = asyncio.get_running_loop()
         # 此时run_in_executor只需传绑定后的函数，无需额外参数
@@ -1887,7 +1907,7 @@ class PeopleQuantApi():
             InstrumentID = quote["InstrumentID"]
             instrument_property = self.get_symbol_info(InstrumentID)
             PriceTick = instrument_property[InstrumentID]["PriceTick"]
-            if not isinstance(price,(float,int)) or price != price or not self.is_multiple_of_decimal(price,PriceTick):
+            if not isinstance(price,(float,int)) or price != price or not self.is_multiple_of_decimal(price,PriceTick)[0]:
                 # 价格不是最小变动价位整数倍 
                 return False
             elif quote["LowerLimitPrice"] <= price <= quote["UpperLimitPrice"] and (quote["BandingLowerPrice"] == quote["BandingUpperPrice"] or quote["BandingLowerPrice"] <= price <= quote["BandingUpperPrice"]) :
@@ -1901,7 +1921,7 @@ class PeopleQuantApi():
                 return True
             else: return False  #无报价
 
-    def get_comb_position(self,CombInstrumentID:str ,wait_return=False, best_price = True  ) -> dict:
+    def get_comb_position(self,CombInstrumentID:str ,wait_return=False, best_price = True  ) -> Position:
         '''
         获取组合合约持仓,需实时调用以获取更新
         根据组合合约CombInstrumentID两条腿的多空持仓计算,开仓均价为组合最优值
@@ -1924,8 +1944,13 @@ class PeopleQuantApi():
         print(p1) # 打印组合持仓
         '''
         if not self.check_instrument(CombInstrumentID): return
+        if CombInstrumentID not in self.quote:
+            leg1,leg2 = CombInstrumentID.split(' ')[-1].split('&')
+            self.get_quote(leg1)
+            self.get_quote(leg2)
+            self.get_quote(CombInstrumentID)
         r = self._sendReq({"reqfuncname":"get_comb_position","CombInstrumentID":CombInstrumentID,"best_price":best_price,"wait_return":wait_return, })
-        return r['ret']
+        return Position().update(r['ret'])
     
     def spread_price(self,leg1,leg2,wait_return=False ) -> dict:
         '''
@@ -1985,20 +2010,20 @@ class PeopleQuantApi():
             with open(file_path, "a", encoding="utf-8") as f:
                 new_df.write_csv( f, include_header=include_header )
 
-    def logs_excel(self,new_df:polars.DataFrame,filename,logfile=""):
+    def logs_excel(self,new_df:polars.DataFrame,filename,finfo='策略盈亏统计',logfile=""):
         '''保存每一个策略的盈亏统计'''
         if not logfile:
             logfile = os.path.dirname(os.path.abspath(__file__))
         #os.makedirs(logfile,exist_ok=True)
         Path(logfile).mkdir(parents=True, exist_ok=True)
-        file_path = fr"{logfile}/策略盈亏统计-{filename}.csv"
+        file_path = fr"{logfile}/{finfo}-{filename}.csv"
         include_header = not os.path.exists(file_path) 
         try:
             with open(file_path, "a", encoding="utf-8") as f:
                 new_df.write_csv( f, include_header=include_header)
         except Exception as e: #文件被占用或其他原因无法写入
-            self.logs_txt(f"保存策略盈亏统计失败,原因:{e}",file_path)
-            file_path = fr"{logfile}/策略盈亏统计-{filename}{datetime.today()}.csv"
+            self.logs_txt(f"保存{finfo}失败,原因:{e}",file_path)
+            file_path = fr"{logfile}/{finfo}-{filename}{datetime.today()}.csv"
             with open(file_path, "a", encoding="utf-8") as f:
                 new_df.write_csv( f,  include_header=include_header )
 
@@ -2054,6 +2079,7 @@ class PeopleQuantApi():
                 with self.data_lock: self.logs_txt(e,logfile,_print,sf)
 
     def send_message(self,DingChan:zhuchannel.ThreadChan,account:Account,orderrisk={},r={},name="",e="",**kw):
+        content = ""
         if isinstance(DingChan,zhuchannel.ThreadChan): 
             if r:
                 position = r['position']
@@ -2075,6 +2101,7 @@ class PeopleQuantApi():
             num = int(ln/lln) + 1 if ln/lln - int(ln/lln) > 0 else int(ln/lln)
             for i in range(1,num+1):
                 DingChan.put_nowait(f"第{i}部分,共{num}部分\n\n" + content[(i-1)*lln:lln*i])
+        return content
 
     def is_multiple_of_decimal(self,dividend, divisor):
         """
@@ -2083,8 +2110,8 @@ class PeopleQuantApi():
         d_dividend = Decimal(str(dividend))
         d_divisor = Decimal(str(divisor))
         
-        # 如果除法结果是整数,余数为0,则说明是其整数倍
-        return d_dividend % d_divisor == 0
+        # 如果除法结果是整数,余数为0,则说明是其整数倍,并且倍数化
+        return d_dividend % d_divisor == 0, float(d_dividend // d_divisor * d_divisor)
 
     def get_quote_info(self,InstrumentID:str):
         '''
@@ -2147,7 +2174,101 @@ class PeopleQuantApi():
                         tick_info = '空换'
         return {'tick_volume':tick_volume,'tick_info':tick_info,'LastPrice':LastPrice}
 
-                    
-                        
+    def insert_comb_action(self,InstrumentID:str,Direction:str,CombDirection:str,Volume:int,HedgeFlag='1',_print=False,WaitReturn=True) :
+        '''
+        申请大商所组合,执行成功返回True.申请成功后会查询组合和单腿持仓明细,受查询流控限制,完整执行一般需要2秒左右
+        组合形成的持仓只是用来实现保证金优惠,只有标准套利组合可以交易，其他不能用于交易
+        Args:
+            InstrumentID: 组合合约码
+            Direction:买卖方向,值为'Buy' 、 'Sell', 拆分需与持仓的方向一致,组合需与第一腿方向一致
+            CombDirection:组合或拆分,'Comb'为组合, 'UnComb'为拆分
+            Volume: 数量
+        Returns:
+            True: 成功
+            None: 失败
+        申请组合填写规则•合约(InstrumentID):
+        针对各组合类型举例如下:
+        a) 期权跨式组合合约申请和拆分(STD m1905-c-2700&m1905-p-2700)
+        b) 期权宽跨式组合合约申请和拆分(STG m1905-p-2400&m1905-c-2700)
+        c) 备兑组合合约申请和拆分(PRT m1905-c-2400&m1905)
+        d) 期货跨期组合合约申请和拆分(SP a1903&a1905)
+        e) 期货跨品种组合合约申请和拆分(SPC c1903&cs1909)
+        f) 期货对锁组合合约申请和拆分(SP a1903& a1903)
+        g) 期权买入垂直价差组合(BLS m1809-P-3150&m1809-P-3100)
+        h) 期权卖出垂直价差组合(BES m1809-P-3350&m1809-P-3150)
+        i) 期权日历价差组合(CAS m1807-P-3150&m1809-P-3150)
+        j) 买入期权期货组合(BFO m1809-P-3150&m1809)
+        k) 期权对锁组合合约申请和拆分(OPL m1809-P-3150&m1809-P-3150)
+
+        •买卖方向(Direction)
+        以上面所列组合类型为例:
+        a、 b:方向为卖。这种组合类型需要左右两腿都是卖持仓，即空头持仓；
+        c:方向为卖。因为目前交易所只支持备兑卖权，不支持备兑买权，即支持左腿是卖持仓的组合，不支持左腿是买持仓的组合。
+        若右腿组合的是多头的期货合约，则称为“备兑看涨期权组合持仓”；若右腿组合的是空头的期货合约，则称为“备兑看跌期权组合持仓”；
+        d、e:当方向是买的时候就是左买持右卖持，当方向是卖的时候就是左卖持右买持；
+        f:方向只支持买，所以是只有左买持右卖持。
+        g:买入垂直价差组合:当方向是买时就是左买持仓右卖持,若为卖则会报错“CTP:找不到合约”
+        h:卖出垂直价差组合:当方向是卖时就是左卖持仓右买持,若为买则会报错“CTP:找不到合约”
+        i:日历价差:
+            1)卖出较近月份的看涨期权合约，买入较远月份相同执行价格的看涨期权合约，组合的买卖方向为卖
+            2)卖出较近月份的看跌期权合约，买入较远月份相同执行价格的看跌期权合约，组合的买卖方向为卖
+        j:买入期权期货组合:组合买卖方向为买
+            1)买入看涨期权，同时卖出对应期货合约
+            2)买入看跌期权，同时买入对应期货合约
+        k:期权对锁组合:组合买卖方向为买
+            1)在同一期权品种同一系列同一合约上建立数量相等、方向相反的头寸
+
+        •组合方向(CombDirection)
+        组合方向支持‘申请组合’和‘拆分组合’。
+
+        •投机套保类型(HedgeFlag)
+        投机套保类型支持‘投机’(指左右两腿都是投机)
+
+        (一)在平仓成交过程中，释放保证金遵循先平单腿持仓，后平优惠组合持仓的原则；当平仓需打破优惠组合时，按照优惠组合持仓的优先级从低到高进行打破。
+
+        (二)在平仓成交过程中，计算平仓盈亏遵循先开先平原则
+
+        '''
+
+        ExchangeID = self.get_symbol_info(InstrumentID.split('&')[1]).ExchangeID
+        i = {"reqfuncname":"insert_comb_action","ExchangeID":ExchangeID,"InstrumentID":InstrumentID,"Direction":Direction,"Volume":Volume,
+                            "HedgeFlag":HedgeFlag,"CombDirection":CombDirection }
+        r = self._sendReq(i)
+        e = f"{datetime.now()} -insert_comb_action,参数:{i}\n"
+        with self.data_lock: self.logs_txt(e,self._logfile,_print=_print) 
+        return r['ret']
+
+    def qry_comb_leg(self,LegInstrumentID:str) -> Union[None,set]:
+        '''
+        查询单腿合约可申请的组合
+        Args:
+            LegInstrumentID: 单腿合约
+        Returns: 合约可申请的组合集合(set),查询不存在返回None
+        '''
+        r = self._sendReq({"reqfuncname":"qry_comb_leg","LegInstrumentID":LegInstrumentID, })
+        return r['ret']
+
+    def qry_symbol_comb_uncomb(self, ExchangeID: Union[str,List[str]] = 'DCE' ) -> Dict[str,Dict[str,Dict[str,int]]]:
+            '''
+            查询账户持仓合约可组成或可拆分的组合,可组合数量需要取两腿持仓数量的最小值,目前只有大商所支持申请组合或拆分
+            Args:
+                ExchangeID: 交易所ID
+            Returns: 
+            symbol_combs为可组合的合约
+            symbol_uncombs为可拆分的合约
+                {'symbol_combs':{ExchangeID:{
+                                            CombInstrumentID:{leg1:{"pos_long":0,"pos_short":0},leg2:{"pos_long":0,"pos_short":0}}
+                                            }          
+                                }, 
+                'symbol_uncombs':{ExchangeID:{
+                                            CombInstrumentID:{"pos_long":0,"pos_short":0}
+                                            }           
+                                },
+                }
+            '''
+            r = self._sendReq({"reqfuncname":"qry_symbol_comb_uncomb","ExchangeID":ExchangeID, })
+            return r['ret']
+
+
 
 
